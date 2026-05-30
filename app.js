@@ -31,6 +31,18 @@ const UIState = {
     schedulerTickInterval: null,
     schedulerSpeed: 800, // ms por tick
 };
+const GRID_CELL_W = 100;
+const GRID_CELL_H = 100;
+const GRID_OFFSET_X = 20;
+const GRID_OFFSET_Y = 20;
+
+function snapToGrid(x, y, iconWidth, iconHeight, desktopRect) {
+    let gridX = Math.round((x - GRID_OFFSET_X) / GRID_CELL_W) * GRID_CELL_W + GRID_OFFSET_X;
+    let gridY = Math.round((y - GRID_OFFSET_Y) / GRID_CELL_H) * GRID_CELL_H + GRID_OFFSET_Y;
+    gridX = Math.max(0, Math.min(gridX, desktopRect.width - iconWidth));
+    gridY = Math.max(0, Math.min(gridY, desktopRect.height - iconHeight));
+    return { left: gridX, top: gridY };
+}
 
 // --- GESTOR DE VENTANAS (DRAG & DROP, RESIZE) ---
 function initWindowManager() {
@@ -259,13 +271,9 @@ function initTaskbar() {
         });
     });
 
-    // Iconos de Escritorio
-    document.querySelectorAll('.desktop-icon').forEach(icon => {
-        icon.addEventListener('click', () => {
-            const winId = icon.getAttribute('data-win');
-            openWindow(winId);
-        });
-    });
+    // Iconos de Escritorio — inicializar con el nuevo sistema de posición libre
+    initDesktopIcons();
+    initDesktopContextMenu();
 }
 
 function updateTaskbarTabs() {
@@ -302,6 +310,514 @@ function updateTaskbarTabs() {
         }
     });
 }
+
+// =====================================================================
+// --- SISTEMA DE ICONOS DEL ESCRITORIO (DRAG LIBRE + CARPETAS) ---
+// =====================================================================
+
+/**
+ * Estado persistente de posiciones e iconos del escritorio
+ * Formato: { id: { x, y, label, type, color, winId? } }
+ */
+const DesktopIconState = {
+    // Carga desde localStorage o usa posición inicial (columna izquierda)
+    positions: JSON.parse(localStorage.getItem('ace_desktop_icon_positions') || 'null'),
+
+    save() {
+        localStorage.setItem('ace_desktop_icon_positions', JSON.stringify(this.positions));
+    },
+
+    // Genera posición en cuadrícula para un icono nuevo (columna izquierda, de arriba abajo)
+    getDefaultPosition(index) {
+        const col = Math.floor(index / 8);
+        const row = index % 8;
+        return { x: 20 + col * 100, y: 20 + row * 100 };
+    }
+};
+
+/**
+ * Inicializa todos los iconos del escritorio como elementos libres y arrastrables
+ */
+function initDesktopIcons() {
+    const container = document.getElementById('desktop-icons-container');
+    const icons = Array.from(container.querySelectorAll('.desktop-icon'));
+
+    // Si no hay posiciones guardadas, generamos las por defecto
+    if (!DesktopIconState.positions) {
+        const pos = {};
+        icons.forEach((icon, i) => {
+            pos[icon.id || ('icon-' + i)] = DesktopIconState.getDefaultPosition(i);
+        });
+        DesktopIconState.positions = pos;
+        DesktopIconState.save();
+    }
+
+    icons.forEach((icon, i) => {
+        const iconId = icon.id || ('icon-sys-' + i);
+        if (!icon.id) icon.id = iconId;
+
+        // Aplicar posición guardada o por defecto
+        const savedPos = DesktopIconState.positions[iconId];
+        if (savedPos) {
+            icon.style.left = savedPos.x + 'px';
+            icon.style.top  = savedPos.y + 'px';
+        } else {
+            const p = DesktopIconState.getDefaultPosition(i);
+            icon.style.left = p.x + 'px';
+            icon.style.top  = p.y + 'px';
+            DesktopIconState.positions[iconId] = p;
+            DesktopIconState.save();
+        }
+
+        // Hacer el icono arrastrable
+        makeDraggableIcon(icon);
+
+        // Click simple: selección
+        icon.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            selectDesktopIcon(icon);
+        });
+
+        // Doble click: abrir ventana o carpeta
+        icon.addEventListener('dblclick', () => {
+            const winId = icon.getAttribute('data-win');
+            if (winId) openWindow(winId);
+        });
+    });
+
+    // Click en escritorio: deseleccionar
+    document.getElementById('desktop').addEventListener('mousedown', (e) => {
+        if (!e.target.closest('.desktop-icon') && !e.target.closest('.window')) {
+            deselectAllIcons();
+        }
+    });
+}
+
+/**
+ * Hace que un icono sea arrastrable libremente por el escritorio
+ */
+function makeDraggableIcon(icon) {
+    let isDragging = false;
+    let dragStartX, dragStartY, iconStartLeft, iconStartTop;
+    let hasMoved = false;
+
+    icon.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        const rect = icon.getBoundingClientRect();
+        iconStartLeft = rect.left;
+        iconStartTop = rect.top;
+        hasMoved = false;
+
+        function onMouseMove(e) {
+            const dx = e.clientX - dragStartX;
+            const dy = e.clientY - dragStartY;
+            if (!isDragging && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+                isDragging = true;
+                hasMoved = true;
+                icon.classList.add('dragging-icon');
+                selectDesktopIcon(icon);
+            }
+            if (!isDragging) return;
+
+            const desktop = document.getElementById('desktop');
+            const dRect = desktop.getBoundingClientRect();
+            let newLeft = iconStartLeft + dx - dRect.left;
+            let newTop = iconStartTop + dy - dRect.top;
+            newLeft = Math.max(0, Math.min(newLeft, dRect.width - icon.offsetWidth));
+            newTop = Math.max(0, Math.min(newTop, dRect.height - icon.offsetHeight));
+            icon.style.left = newLeft + 'px';
+            icon.style.top = newTop + 'px';
+        }
+
+        function onMouseUp() {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            if (isDragging) {
+                isDragging = false;
+                icon.classList.remove('dragging-icon');
+                // Snap a la cuadrícula
+                const desktopRect = document.getElementById('desktop').getBoundingClientRect();
+                const currentLeft = parseFloat(icon.style.left);
+                const currentTop = parseFloat(icon.style.top);
+                const snapped = snapToGrid(currentLeft, currentTop, icon.offsetWidth, icon.offsetHeight, desktopRect);
+                icon.style.left = snapped.left + 'px';
+                icon.style.top = snapped.top + 'px';
+                const iconId = icon.id;
+                if (!DesktopIconState.positions) DesktopIconState.positions = {};
+                DesktopIconState.positions[iconId] = {
+                    x: parseFloat(icon.style.left),
+                    y: parseFloat(icon.style.top)
+                };
+                DesktopIconState.save();
+            }
+        }
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    });
+}
+
+let _selectedIcon = null;
+
+function selectDesktopIcon(icon) {
+    deselectAllIcons();
+    icon.classList.add('selected-icon');
+    _selectedIcon = icon;
+}
+
+function deselectAllIcons() {
+    document.querySelectorAll('.desktop-icon.selected-icon').forEach(i => i.classList.remove('selected-icon'));
+    _selectedIcon = null;
+}
+
+/**
+ * Crea un icono de carpeta del escritorio y lo añade al escritorio
+ */
+function createDesktopFolder(name, color) {
+    if (!name || name.trim() === "") {
+        alert("El nombre de la carpeta no puede estar vacío.");
+        return null;
+    }
+    name = name.trim();
+    const existing = document.querySelector(`.desktop-icon[data-folder="${name}"]`);
+    if (existing) {
+        alert(`Ya existe una carpeta llamada "${name}" en el escritorio.`);
+        return null;
+    }
+
+    const folderId = 'desktop-folder-' + Date.now();
+    const container = document.getElementById('desktop-icons-container');
+    const allIcons = container.querySelectorAll('.desktop-icon').length;
+    let pos = DesktopIconState.getDefaultPosition(allIcons);
+
+    const folderEl = document.createElement('div');
+    folderEl.className = 'desktop-icon desktop-folder-icon';
+    folderEl.id = folderId;
+    folderEl.setAttribute('data-folder', name);
+    folderEl.style.left = pos.x + 'px';
+    folderEl.style.top = pos.y + 'px';
+    folderEl.innerHTML = `
+        <div class="icon-wrapper">
+            <svg viewBox="0 0 24 24" fill="${color || '#f59e0b'}" stroke="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 4H4c-1.1 0-2 .9-2 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" opacity="0.9"/>
+            </svg>
+        </div>
+        <span>${name}</span>
+    `;
+
+    // Crear directorio real en VFS bajo /home/Desktop/<name>
+    if (typeof vfs !== 'undefined') {
+        if (!vfs.root.children['home']) vfs.mkdir('home');
+        if (!vfs.root.children['home'].children['Desktop']) {
+            vfs.root.children['home'].children['Desktop'] = new VFSNode('Desktop', 'dir');
+        }
+        const desktopDir = vfs.root.children['home'].children['Desktop'];
+        if (!desktopDir.children[name]) {
+            desktopDir.children[name] = new VFSNode(name, 'dir');
+            vfs.saveToStorage();
+            vfs.appendLog(`Carpeta real creada en VFS: /home/Desktop/${name}`);
+        } else {
+            alert(`Ya existe una carpeta con el nombre "${name}" en /home/Desktop.`);
+            return null;
+        }
+    }
+
+    if (!DesktopIconState.positions) DesktopIconState.positions = {};
+    DesktopIconState.positions[folderId] = { x: pos.x, y: pos.y };
+    saveDesktopFolders();
+
+    container.appendChild(folderEl);
+    makeDraggableIcon(folderEl);
+    folderEl.addEventListener('mousedown', (e) => { if (e.button === 0) selectDesktopIcon(folderEl); });
+    folderEl.addEventListener('dblclick', () => { openDesktopFolder(name); });
+    folderEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showDesktopFolderContextMenu(e.clientX, e.clientY, folderEl, name, folderId);
+    });
+
+    selectDesktopIcon(folderEl);
+    DesktopIconState.save();
+    return folderEl;
+}
+
+/**
+ * Abre el explorador VFS en la carpeta del escritorio
+ */
+function openDesktopFolder(name) {
+    const homeNode = vfs.root.children['home'];
+    if (!homeNode.children['Desktop']) {
+        homeNode.children['Desktop'] = new VFSNode('Desktop', 'dir');
+        vfs.saveToStorage();
+    }
+    const desktopDir = homeNode.children['Desktop'];
+    if (!desktopDir.children[name]) {
+        desktopDir.children[name] = new VFSNode(name, 'dir');
+        vfs.saveToStorage();
+    }
+    openWindow('win-explorer');
+    vfs.currentPath = ['home', 'Desktop', name];
+    const pathBar = document.getElementById('path-bar-text');
+    if (pathBar) pathBar.textContent = `/home/Desktop/${name}`;
+    updateExplorerGrid();
+}
+
+/**
+ * Persistencia de carpetas del escritorio en localStorage
+ */
+function saveDesktopFolders() {
+    const folders = [];
+    document.querySelectorAll('.desktop-icon.desktop-folder-icon').forEach(el => {
+        folders.push({
+            id: el.id,
+            name: el.getAttribute('data-folder'),
+            color: el.querySelector('svg path')?.getAttribute('fill') || '#f59e0b'
+        });
+    });
+    localStorage.setItem('ace_desktop_folders', JSON.stringify(folders));
+}
+
+/**
+ * Restaurar carpetas del escritorio al cargar
+ */
+function restoreDesktopFolders() {
+    const raw = localStorage.getItem('ace_desktop_folders');
+    if (!raw) return;
+    try {
+        const folders = JSON.parse(raw);
+        folders.forEach(f => {
+            // Evitar duplicados
+            if (!document.getElementById(f.id)) {
+                const el = createDesktopFolder(f.name, f.color);
+                el.id = f.id;
+                // Restaurar posición guardada
+                const savedPos = DesktopIconState.positions?.[f.id];
+                if (savedPos) {
+                    el.style.left = savedPos.x + 'px';
+                    el.style.top  = savedPos.y + 'px';
+                }
+            }
+        });
+    } catch (e) {
+        console.error('Error restaurando carpetas del escritorio:', e);
+    }
+}
+
+/**
+ * Menú contextual específico para carpetas del escritorio
+ */
+function showDesktopFolderContextMenu(x, y, folderEl, folderName, folderId) {
+    removeDesktopContextMenus();
+
+    const menu = document.createElement('div');
+    menu.className = 'desktop-context-menu';
+    menu.id = 'desktop-ctx-menu';
+    menu.style.left = x + 'px';
+    menu.style.top  = y + 'px';
+    menu.innerHTML = `
+        <div class="ctx-item" id="ctx-open-folder">
+            <span class="ctx-icon">📂</span> Abrir carpeta
+        </div>
+        <div class="ctx-item" id="ctx-rename-folder">
+            <span class="ctx-icon">✏️</span> Renombrar
+        </div>
+        <div class="ctx-separator"></div>
+        <div class="ctx-item danger" id="ctx-delete-folder">
+            <span class="ctx-icon">🗑️</span> Eliminar del escritorio
+        </div>
+    `;
+    document.body.appendChild(menu);
+    clampContextMenu(menu);
+
+    menu.querySelector('#ctx-open-folder').addEventListener('click', () => {
+        openDesktopFolder(folderName);
+        removeDesktopContextMenus();
+    });
+    menu.querySelector('#ctx-rename-folder').addEventListener('click', () => {
+        removeDesktopContextMenus();
+        startIconRename(folderEl, (newName) => {
+            folderEl.setAttribute('data-folder', newName);
+            saveDesktopFolders();
+        });
+    });
+    menu.querySelector('#ctx-delete-folder').addEventListener('click', () => {
+        folderEl.remove();
+        if (DesktopIconState.positions) {
+            delete DesktopIconState.positions[folderId];
+            DesktopIconState.save();
+        }
+        saveDesktopFolders();
+        removeDesktopContextMenus();
+    });
+
+    setTimeout(() => {
+        document.addEventListener('mousedown', onOutsideClick);
+    }, 10);
+
+    function onOutsideClick(e) {
+        if (!menu.contains(e.target)) {
+            removeDesktopContextMenus();
+            document.removeEventListener('mousedown', onOutsideClick);
+        }
+    }
+}
+
+/**
+ * Renombrar un icono del escritorio en línea
+ */
+function startIconRename(iconEl, onSave) {
+    const spanEl = iconEl.querySelector('span');
+    const currentName = spanEl.textContent;
+
+    const input = document.createElement('input');
+    input.className = 'icon-label-input';
+    input.value = currentName;
+    spanEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    function finishRename() {
+        const newName = input.value.trim() || currentName;
+        const newSpan = document.createElement('span');
+        newSpan.textContent = newName;
+        input.replaceWith(newSpan);
+        if (onSave) onSave(newName);
+    }
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') finishRename();
+        if (e.key === 'Escape') {
+            const s = document.createElement('span');
+            s.textContent = currentName;
+            input.replaceWith(s);
+        }
+    });
+    input.addEventListener('blur', finishRename);
+}
+
+/**
+ * Menú contextual del escritorio (clic derecho en área vacía)
+ */
+function initDesktopContextMenu() {
+    const desktop = document.getElementById('desktop');
+
+    desktop.addEventListener('contextmenu', (e) => {
+        // Solo si el clic es en el escritorio vacío (no en icono o ventana)
+        if (e.target.closest('.desktop-icon') || e.target.closest('.window')) return;
+        e.preventDefault();
+        showDesktopContextMenu(e.clientX, e.clientY);
+    });
+}
+
+function showDesktopContextMenu(x, y) {
+    removeDesktopContextMenus();
+
+    const menu = document.createElement('div');
+    menu.className = 'desktop-context-menu';
+    menu.id = 'desktop-ctx-menu';
+    menu.style.left = x + 'px';
+    menu.style.top  = y + 'px';
+
+    menu.innerHTML = `
+        <div class="ctx-item" id="ctx-new-folder">
+            <span class="ctx-icon">📁</span> Nueva carpeta
+        </div>
+        <div class="ctx-separator"></div>
+        <div class="ctx-item" id="ctx-open-explorer">
+            <span class="ctx-icon">🗂️</span> Abrir Explorador
+        </div>
+        <div class="ctx-item" id="ctx-open-terminal">
+            <span class="ctx-icon">💻</span> Abrir Terminal
+        </div>
+        <div class="ctx-separator"></div>
+        <div class="ctx-item" id="ctx-arrange-icons">
+            <span class="ctx-icon">⚡</span> Reorganizar iconos
+        </div>
+    `;
+    document.body.appendChild(menu);
+    clampContextMenu(menu);
+
+    menu.querySelector('#ctx-new-folder').addEventListener('click', () => {
+        removeDesktopContextMenus();
+        const name = prompt('Nombre de la nueva carpeta:', 'Nueva Carpeta');
+        if (name && name.trim()) {
+            createDesktopFolder(name.trim(), '#f59e0b');
+        }
+    });
+
+    menu.querySelector('#ctx-open-explorer').addEventListener('click', () => {
+        openWindow('win-explorer');
+        removeDesktopContextMenus();
+    });
+
+    menu.querySelector('#ctx-open-terminal').addEventListener('click', () => {
+        openWindow('win-terminal');
+        removeDesktopContextMenus();
+    });
+
+    menu.querySelector('#ctx-arrange-icons').addEventListener('click', () => {
+        autoArrangeDesktopIcons();
+        removeDesktopContextMenus();
+    });
+
+    setTimeout(() => {
+        document.addEventListener('mousedown', onOutsideClick);
+    }, 10);
+
+    function onOutsideClick(e) {
+        if (!menu.contains(e.target)) {
+            removeDesktopContextMenus();
+            document.removeEventListener('mousedown', onOutsideClick);
+        }
+    }
+}
+
+/**
+ * Elimina todos los menús contextuales del escritorio
+ */
+function removeDesktopContextMenus() {
+    document.querySelectorAll('#desktop-ctx-menu, #vfs-context-menu').forEach(m => m.remove());
+}
+
+/**
+ * Asegura que el menú no salga fuera de la pantalla
+ */
+function clampContextMenu(menu) {
+    requestAnimationFrame(() => {
+        const rect = menu.getBoundingClientRect();
+        if (rect.right > window.innerWidth)  menu.style.left = (window.innerWidth  - rect.width  - 5) + 'px';
+        if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 5) + 'px';
+    });
+}
+
+/**
+ * Reorganiza todos los iconos del escritorio en columnas
+ */
+function autoArrangeDesktopIcons() {
+    const icons = Array.from(document.querySelectorAll('.desktop-icon'));
+    const rowH = 100, colW = 100;
+    const maxRows = Math.floor((window.innerHeight - 50) / rowH);
+
+    icons.forEach((icon, i) => {
+        const col = Math.floor(i / maxRows);
+        const row = i % maxRows;
+        const newX = 20 + col * colW;
+        const newY = 20 + row * rowH;
+        icon.style.left = newX + 'px';
+        icon.style.top  = newY + 'px';
+
+        if (!DesktopIconState.positions) DesktopIconState.positions = {};
+        DesktopIconState.positions[icon.id] = { x: newX, y: newY };
+    });
+    DesktopIconState.save();
+}
+
+// Hacer funciones globales accesibles
+window.createDesktopFolder  = createDesktopFolder;
+window.autoArrangeDesktopIcons = autoArrangeDesktopIcons;
 
 // --- INTEGRACIÓN CON BACKEND (MÉTRICAS REALES Y MOCK) ---
 async function checkBackendConnection() {
@@ -964,24 +1480,18 @@ function initExplorer() {
 
     document.getElementById('explorer-mkdir-btn').addEventListener('click', () => {
         const name = prompt("Nombre de la nueva carpeta:");
-        if (name) {
-            if (vfs.mkdir(name)) {
-                updateExplorerGrid();
-            } else {
-                alert("Error al crear carpeta (ya existe o nombre inválido).");
-            }
-        }
+        if (name && name.trim()) {
+            if (vfs.mkdir(name.trim())) updateExplorerGrid();
+            else alert("Error al crear carpeta (ya existe o nombre inválido).");
+        } else if (name !== null) alert("El nombre no puede estar vacío.");
     });
 
     document.getElementById('explorer-mkfile-btn').addEventListener('click', () => {
         const name = prompt("Nombre del archivo (ej. notas.txt):");
-        if (name) {
-            if (vfs.createFile(name, "Editar contenido aquí.")) {
-                updateExplorerGrid();
-            } else {
-                alert("Error al crear el archivo.");
-            }
-        }
+        if (name && name.trim()) {
+            if (vfs.createFile(name.trim(), "Editar contenido aquí.")) updateExplorerGrid();
+            else alert("Error al crear el archivo.");
+        } else if (name !== null) alert("El nombre no puede estar vacío.");
     });
 }
 
@@ -1093,38 +1603,26 @@ function updateExplorerGrid() {
 
 function moveToTrash(name) {
     if (vfs.currentPath.length === 1 && vfs.currentPath[0] === 'Papelera') {
-        // Borrar permanentemente si ya está en la papelera
-        if (confirm(`¿Eliminar permanentemente '${name}'?`)) {
+        if (confirm(`¿Eliminar permanentemente '${name}'? Esta acción no se puede deshacer.`)) {
             vfs.deleteNode(name);
             updateExplorerGrid();
         }
         return;
     }
-
+    if (!confirm(`¿Mover '${name}' a la Papelera?`)) return;
     const currentNode = vfs.getCurrentNode();
     const node = currentNode.children[name];
     if (node) {
-        if (!vfs.root.children['Papelera']) {
-            vfs.root.children['Papelera'] = new VFSNode('Papelera', 'dir');
-        }
-        
-        // Evitar duplicados en papelera
+        if (!vfs.root.children['Papelera']) vfs.root.children['Papelera'] = new VFSNode('Papelera', 'dir');
         let trashName = name;
         let counter = 1;
-        while (vfs.root.children['Papelera'].children[trashName]) {
-            trashName = `${name}_(${counter})`;
-            counter++;
-        }
-        
+        while (vfs.root.children['Papelera'].children[trashName]) trashName = `${name}_(${counter++})`;
         vfs.root.children['Papelera'].children[trashName] = node;
         node.name = trashName;
         delete currentNode.children[name];
         vfs.saveToStorage();
         updateExplorerGrid();
-        
-        if (typeof vfs !== 'undefined' && vfs.appendLog) {
-            vfs.appendLog(`Archivo '${name}' movido a la Papelera.`);
-        }
+        if (typeof vfs !== 'undefined' && vfs.appendLog) vfs.appendLog(`Archivo '${name}' movido a la Papelera.`);
     }
 }
 
@@ -1731,6 +2229,107 @@ function playExternalDeviceSound() {
     }
 }
 
+// --- NUEVAS APLICACIONES: CÁMARA Y GALERÍA ---
+function initCamera() {
+    const video = document.getElementById('camera-video');
+    const canvas = document.getElementById('camera-canvas');
+    const captureBtn = document.getElementById('camera-capture');
+    const saveBtn = document.getElementById('camera-save');
+    const closeBtn = document.getElementById('camera-close');
+    let capturedImageData = null;
+
+    async function startCamera() {
+        if (UIState.cameraStream) UIState.cameraStream.getTracks().forEach(track => track.stop());
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            UIState.cameraStream = stream;
+            video.play();
+        } catch (err) { alert("No se pudo acceder a la cámara: " + err.message); }
+    }
+
+    captureBtn.addEventListener('click', () => {
+        const context = canvas.getContext('2d');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        capturedImageData = canvas.toDataURL('image/png');
+        const preview = document.getElementById('camera-preview-img');
+        preview.src = capturedImageData;
+        preview.style.display = 'block';
+        saveBtn.disabled = false;
+    });
+
+    saveBtn.addEventListener('click', () => {
+        if (!capturedImageData) return;
+        const timestamp = Date.now();
+        const filename = `camera_${timestamp}.png`;
+        if (typeof vfs !== 'undefined') {
+            if (!vfs.root.children['home']) vfs.mkdir('home');
+            if (!vfs.root.children['home'].children['Pictures']) vfs.root.children['home'].children['Pictures'] = new VFSNode('Pictures', 'dir');
+            const pictures = vfs.root.children['home'].children['Pictures'];
+            pictures.children[filename] = new VFSNode(filename, 'file', capturedImageData);
+            vfs.saveToStorage();
+            vfs.appendLog(`Foto guardada: ${filename}`);
+            alert(`Foto guardada en /home/Pictures/${filename}`);
+            capturedImageData = null;
+            saveBtn.disabled = true;
+            document.getElementById('camera-preview-img').style.display = 'none';
+        } else alert("VFS no disponible");
+    });
+
+    closeBtn.addEventListener('click', () => {
+        if (UIState.cameraStream) { UIState.cameraStream.getTracks().forEach(track => track.stop()); UIState.cameraStream = null; }
+        document.getElementById('win-camera').style.display = 'none';
+    });
+
+    const winCamera = document.getElementById('win-camera');
+    const observer = new MutationObserver((mutations) => {
+        if (winCamera.style.display === 'flex') startCamera();
+        else if (UIState.cameraStream) { UIState.cameraStream.getTracks().forEach(track => track.stop()); UIState.cameraStream = null; }
+    });
+    observer.observe(winCamera, { attributes: true, attributeFilter: ['style'] });
+}
+
+function initGallery() {
+    const galleryGrid = document.getElementById('gallery-grid');
+    const fullscreenView = document.getElementById('gallery-fullscreen');
+    const fullscreenImg = document.getElementById('gallery-fullscreen-img');
+    const closeFullscreen = document.getElementById('gallery-close-fullscreen');
+
+    function loadGallery() {
+        galleryGrid.innerHTML = '';
+        const picturesDir = vfs.root.children['home']?.children['Pictures'];
+        if (!picturesDir) { galleryGrid.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">No hay imágenes. Usa la Cámara para tomar fotos.</p>'; return; }
+        const imageFiles = Object.values(picturesDir.children).filter(node => node.type === 'file' && /\.(png|jpg|jpeg)$/i.test(node.name));
+        if (imageFiles.length === 0) { galleryGrid.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">No hay imágenes. Usa la Cámara para tomar fotos.</p>'; return; }
+        imageFiles.forEach(imgNode => {
+            const card = document.createElement('div');
+            card.className = 'gallery-item';
+            const img = document.createElement('img');
+            img.src = imgNode.content;
+            img.alt = imgNode.name;
+            const span = document.createElement('span');
+            span.textContent = imgNode.name;
+            card.appendChild(img);
+            card.appendChild(span);
+            card.addEventListener('click', () => { fullscreenImg.src = imgNode.content; fullscreenView.style.display = 'flex'; });
+            galleryGrid.appendChild(card);
+        });
+    }
+
+    closeFullscreen.addEventListener('click', () => { fullscreenView.style.display = 'none'; fullscreenImg.src = ''; });
+
+    const winGallery = document.getElementById('win-gallery');
+    const observer = new MutationObserver((mutations) => { if (winGallery.style.display === 'flex') loadGallery(); });
+    observer.observe(winGallery, { attributes: true, attributeFilter: ['style'] });
+}
+
+function openCamera() { openWindow('win-camera'); }
+function openGallery() { openWindow('win-gallery'); }
+window.openCamera = openCamera;
+window.openGallery = openGallery;
+
 window.addEventListener('DOMContentLoaded', () => {
     initWindowManager();
     initTaskbar();
@@ -1741,8 +2340,48 @@ window.addEventListener('DOMContentLoaded', () => {
     initBrowser();
     initKernelSimulator();
     initSettings();
+    initCamera();
+    initGallery();
 
-    // Listener para icono de papelera
+    // Restaurar carpetas de escritorio persistidas
+    restoreDesktopFolders();
+
+        // Añadir iconos de cámara y galería si no existen
+    const container = document.getElementById('desktop-icons-container');
+    if (!document.getElementById('icon-camera')) {
+        const cameraIcon = document.createElement('div');
+        cameraIcon.className = 'desktop-icon';
+        cameraIcon.id = 'icon-camera';
+        cameraIcon.setAttribute('data-win', 'win-camera');
+        cameraIcon.innerHTML = `<div class="icon-wrapper"><svg viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div><span>Cámara</span>`;
+        cameraIcon.addEventListener('dblclick', () => openCamera());
+        container.appendChild(cameraIcon);
+        makeDraggableIcon(cameraIcon);
+    }
+    if (!document.getElementById('icon-gallery')) {
+        const galleryIcon = document.createElement('div');
+        galleryIcon.className = 'desktop-icon';
+        galleryIcon.id = 'icon-gallery';
+        galleryIcon.setAttribute('data-win', 'win-gallery');
+        galleryIcon.innerHTML = `<div class="icon-wrapper"><svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2"/><circle cx="8.5" cy="8.5" r="2.5"/><path d="M21 15l-5-4-3 3-4-4-5 5"/></svg></div><span>Galería</span>`;
+        galleryIcon.addEventListener('dblclick', () => openGallery());
+        container.appendChild(galleryIcon);
+        makeDraggableIcon(galleryIcon);
+    }
+
+    // Ajustar posiciones de los nuevos iconos (para que queden en la cuadrícula)
+    const allIcons = Array.from(container.querySelectorAll('.desktop-icon'));
+    allIcons.forEach((icon, idx) => {
+        if (!DesktopIconState.positions[icon.id]) {
+            const pos = DesktopIconState.getDefaultPosition(idx);
+            icon.style.left = pos.x + 'px';
+            icon.style.top = pos.y + 'px';
+            DesktopIconState.positions[icon.id] = pos;
+        }
+    });
+    DesktopIconState.save();
+
+    // Listener para icono de papelera — dblclick abre el explorador en la papelera
     const iconPapelera = document.getElementById('icon-papelera');
     if (iconPapelera) {
         iconPapelera.addEventListener('dblclick', () => {
@@ -1754,19 +2393,6 @@ window.addEventListener('DOMContentLoaded', () => {
                 vfs.saveToStorage();
             }
             
-            vfs.currentPath = ['Papelera'];
-            const pathText = document.getElementById('path-bar-text');
-            if(pathText) pathText.textContent = '/Papelera';
-            updateExplorerGrid();
-        });
-        
-        // También con un solo click por si acaso, como el resto
-        iconPapelera.addEventListener('click', () => {
-            openWindow('win-explorer');
-            if (!vfs.root.children['Papelera']) {
-                vfs.root.children['Papelera'] = new VFSNode('Papelera', 'dir');
-                vfs.saveToStorage();
-            }
             vfs.currentPath = ['Papelera'];
             const pathText = document.getElementById('path-bar-text');
             if(pathText) pathText.textContent = '/Papelera';
@@ -1941,6 +2567,18 @@ function mountUSBDevice() {
             updateExplorerGrid();
         });
         desktopIcons.appendChild(usbIcon);
+
+        // Hacerlo arrastrable como el resto de iconos del escritorio
+        if (!DesktopIconState.positions) DesktopIconState.positions = {};
+        if (!DesktopIconState.positions['icon-usb0']) {
+            const allIcons = desktopIcons.querySelectorAll('.desktop-icon').length;
+            DesktopIconState.positions['icon-usb0'] = DesktopIconState.getDefaultPosition(allIcons - 1);
+            DesktopIconState.save();
+        }
+        const usbPos = DesktopIconState.positions['icon-usb0'];
+        usbIcon.style.left = usbPos.x + 'px';
+        usbIcon.style.top  = usbPos.y + 'px';
+        makeDraggableIcon(usbIcon);
     }
 
     // Añadir a sidebar del explorador

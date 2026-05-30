@@ -60,17 +60,16 @@ body {
 #desktop.wp-gradient-dark { background: linear-gradient(135deg, #030712 0%, #111827 50%, #1f2937 100%); }
 #desktop.wp-gradient-emerald { background: linear-gradient(135deg, #062f22 0%, #064e3b 50%, #0f766e 100%); }
 
-/* Grid of desktop icons */
+/* Grid of desktop icons — ahora es solo contenedor de fondo, los iconos son libres */
 .desktop-icons {
-    display: grid;
-    grid-template-rows: repeat(auto-fill, 90px);
-    grid-auto-flow: column;
-    gap: 15px;
-    height: 100%;
-    width: fit-content;
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none; /* El contenedor no bloquea clics al escritorio */
 }
 
 .desktop-icon {
+    position: absolute;
     width: 80px;
     height: 85px;
     display: flex;
@@ -80,8 +79,11 @@ body {
     text-align: center;
     border-radius: 8px;
     cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                border-color 0.2s ease,
+                box-shadow 0.2s ease;
     border: 1px solid transparent;
+    pointer-events: all; /* Los iconos sí reciben eventos */
 }
 
 .desktop-icon:hover {
@@ -90,9 +92,19 @@ body {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-.desktop-icon:active {
-    background: rgba(255, 255, 255, 0.12);
-    transform: scale(0.95);
+.desktop-icon.dragging-icon {
+    opacity: 0.75;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    box-shadow: 0 8px 24px rgba(59, 130, 246, 0.25);
+    cursor: grabbing;
+    z-index: 9000 !important;
+    transition: none; /* Sin animación mientras arrastra */
+}
+
+.desktop-icon.selected-icon {
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.4);
 }
 
 .desktop-icon .icon-wrapper {
@@ -119,6 +131,81 @@ body {
     text-overflow: ellipsis;
     max-width: 76px;
     color: #e5e7eb;
+}
+
+/* Icono de carpeta de escritorio */
+.desktop-folder-icon .icon-wrapper svg {
+    width: 44px;
+    height: 44px;
+}
+
+/* Menú contextual del escritorio */
+.desktop-context-menu {
+    position: fixed;
+    background: rgba(15, 23, 42, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 6px 0;
+    min-width: 185px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255,255,255,0.04);
+    z-index: 50000;
+    font-size: 13px;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    animation: ctx-appear 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes ctx-appear {
+    from { opacity: 0; transform: scale(0.95) translateY(-4px); }
+    to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+
+.desktop-context-menu .ctx-separator {
+    height: 1px;
+    background: rgba(255,255,255,0.08);
+    margin: 4px 0;
+}
+
+.desktop-context-menu .ctx-item {
+    padding: 8px 14px;
+    cursor: pointer;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    border-radius: 4px;
+    margin: 0 4px;
+    transition: background 0.15s ease;
+}
+
+.desktop-context-menu .ctx-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.desktop-context-menu .ctx-item.danger:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: var(--color-danger);
+}
+
+.desktop-context-menu .ctx-item span.ctx-icon {
+    font-size: 15px;
+    width: 20px;
+    text-align: center;
+}
+
+/* Etiqueta editable en icono de escritorio */
+.desktop-icon .icon-label-input {
+    font-size: 11px;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    background: rgba(59,130,246,0.25);
+    border: 1px solid rgba(59,130,246,0.6);
+    border-radius: 3px;
+    color: white;
+    text-align: center;
+    outline: none;
+    width: 74px;
+    padding: 1px 2px;
 }
 
 /* --- WINDOW MANAGER --- */
@@ -1834,4 +1921,59 @@ input:checked + .slider:before {
 }
 #pdf-viewer-frame {
     background: white;
+}
+/* Estilos para la Galería */
+.gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 15px;
+    padding: 15px;
+    overflow-y: auto;
+    height: 100%;
+}
+
+.gallery-item {
+    background: rgba(255,255,255,0.05);
+    border-radius: 8px;
+    padding: 8px;
+    cursor: pointer;
+    text-align: center;
+    transition: transform 0.2s, background 0.2s;
+}
+
+.gallery-item:hover {
+    background: rgba(255,255,255,0.1);
+    transform: scale(1.02);
+}
+
+.gallery-item img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    border-radius: 6px;
+}
+
+.gallery-item span {
+    display: block;
+    font-size: 11px;
+    margin-top: 6px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Estilos para la ventana de cámara */
+#camera-video {
+    width: 100%;
+    max-height: 360px;
+    background: #000;
+    border-radius: 8px;
+}
+
+#camera-preview-img {
+    max-width: 200px;
+    max-height: 150px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.2);
 }
