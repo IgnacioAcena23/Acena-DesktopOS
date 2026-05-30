@@ -1,0 +1,15 @@
+{
+  "name": "ace-a-desktop-os",
+  "version": "1.0.0",
+  "description": "Ace-a-DesktopOS - Simulador de Sistema Operativo de Escritorio con Navegador Real",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "author": "Ace-a-DesktopOS Team",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^35.0.0"
+  }
+}
