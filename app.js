@@ -36,12 +36,70 @@ const GRID_CELL_H = 100;
 const GRID_OFFSET_X = 20;
 const GRID_OFFSET_Y = 20;
 
+function getFreeGridPosition() {
+    const container = document.getElementById('desktop-icons-container');
+    const icons = Array.from(container.querySelectorAll('.desktop-icon'));
+    const occupied = new Set();
+    icons.forEach(icon => {
+        const left = parseFloat(icon.style.left);
+        const top = parseFloat(icon.style.top);
+        if (!isNaN(left) && !isNaN(top)) {
+            // Determinar celda (col, row)
+            const col = Math.round((left - GRID_OFFSET_X) / GRID_CELL_W);
+            const row = Math.round((top - GRID_OFFSET_Y) / GRID_CELL_H);
+            occupied.add(`${col},${row}`);
+        }
+    });
+    // Buscar primera celda libre empezando desde (0,0)
+    let row = 0, col = 0;
+    while (true) {
+        if (!occupied.has(`${col},${row}`)) {
+            return {
+                x: GRID_OFFSET_X + col * GRID_CELL_W,
+                y: GRID_OFFSET_Y + row * GRID_CELL_H
+            };
+        }
+        col++;
+        if (col > 10) { col = 0; row++; }
+        if (row > 20) break; // límite
+    }
+    // Si todo lleno, devolver una posición desplazada
+    return { x: GRID_OFFSET_X, y: GRID_OFFSET_Y + (icons.length * GRID_CELL_H) };
+}
+
 function snapToGrid(x, y, iconWidth, iconHeight, desktopRect) {
     let gridX = Math.round((x - GRID_OFFSET_X) / GRID_CELL_W) * GRID_CELL_W + GRID_OFFSET_X;
     let gridY = Math.round((y - GRID_OFFSET_Y) / GRID_CELL_H) * GRID_CELL_H + GRID_OFFSET_Y;
     gridX = Math.max(0, Math.min(gridX, desktopRect.width - iconWidth));
     gridY = Math.max(0, Math.min(gridY, desktopRect.height - iconHeight));
     return { left: gridX, top: gridY };
+}
+
+function findNonOverlappingPosition(x, y, currentIcon) {
+    const container = document.getElementById('desktop-icons-container');
+    const icons = Array.from(container.querySelectorAll('.desktop-icon')).filter(icon => icon !== currentIcon);
+    let newX = x, newY = y;
+    let overlapping = true;
+    let attempts = 0;
+    while (overlapping && attempts < 50) {
+        overlapping = false;
+        for (let other of icons) {
+            const otherLeft = parseFloat(other.style.left);
+            const otherTop = parseFloat(other.style.top);
+            if (Math.abs(newX - otherLeft) < GRID_CELL_W && Math.abs(newY - otherTop) < GRID_CELL_H) {
+                overlapping = true;
+                // Desplazar a la siguiente celda a la derecha, luego abajo
+                newX += GRID_CELL_W;
+                if (newX > window.innerWidth - 100) {
+                    newX = GRID_OFFSET_X;
+                    newY += GRID_CELL_H;
+                }
+                break;
+            }
+        }
+        attempts++;
+    }
+    return { x: newX, y: newY };
 }
 
 // --- GESTOR DE VENTANAS (DRAG & DROP, RESIZE) ---
@@ -439,13 +497,15 @@ function makeDraggableIcon(icon) {
             if (isDragging) {
                 isDragging = false;
                 icon.classList.remove('dragging-icon');
-                // Snap a la cuadrícula
                 const desktopRect = document.getElementById('desktop').getBoundingClientRect();
-                const currentLeft = parseFloat(icon.style.left);
-                const currentTop = parseFloat(icon.style.top);
-                const snapped = snapToGrid(currentLeft, currentTop, icon.offsetWidth, icon.offsetHeight, desktopRect);
-                icon.style.left = snapped.left + 'px';
-                icon.style.top = snapped.top + 'px';
+                let currentLeft = parseFloat(icon.style.left);
+                let currentTop = parseFloat(icon.style.top);
+                // Snap a cuadrícula
+                let snapped = snapToGrid(currentLeft, currentTop, icon.offsetWidth, icon.offsetHeight, desktopRect);
+                // Verificar si esa celda está ocupada por otro icono
+                let finalPos = findNonOverlappingPosition(snapped.left, snapped.top, icon);
+                icon.style.left = finalPos.x + 'px';
+                icon.style.top = finalPos.y + 'px';
                 const iconId = icon.id;
                 if (!DesktopIconState.positions) DesktopIconState.positions = {};
                 DesktopIconState.positions[iconId] = {
@@ -482,6 +542,7 @@ function createDesktopFolder(name, color) {
         return null;
     }
     name = name.trim();
+    // Verificar duplicado en escritorio (por data-folder)
     const existing = document.querySelector(`.desktop-icon[data-folder="${name}"]`);
     if (existing) {
         alert(`Ya existe una carpeta llamada "${name}" en el escritorio.`);
@@ -490,13 +551,15 @@ function createDesktopFolder(name, color) {
 
     const folderId = 'desktop-folder-' + Date.now();
     const container = document.getElementById('desktop-icons-container');
-    const allIcons = container.querySelectorAll('.desktop-icon').length;
-    let pos = DesktopIconState.getDefaultPosition(allIcons);
+
+    // Obtener una posición libre en la cuadrícula
+    let pos = getFreeGridPosition();
 
     const folderEl = document.createElement('div');
     folderEl.className = 'desktop-icon desktop-folder-icon';
     folderEl.id = folderId;
     folderEl.setAttribute('data-folder', name);
+    folderEl.setAttribute('data-win', ''); // No abre ventana, es carpeta
     folderEl.style.left = pos.x + 'px';
     folderEl.style.top = pos.y + 'px';
     folderEl.innerHTML = `
@@ -508,8 +571,9 @@ function createDesktopFolder(name, color) {
         <span>${name}</span>
     `;
 
-    // Crear directorio real en VFS bajo /home/Desktop/<name>
+    // --- Crear directorio real en VFS bajo /home/Desktop/<name> ---
     if (typeof vfs !== 'undefined') {
+        // Asegurar estructura /home/Desktop
         if (!vfs.root.children['home']) vfs.mkdir('home');
         if (!vfs.root.children['home'].children['Desktop']) {
             vfs.root.children['home'].children['Desktop'] = new VFSNode('Desktop', 'dir');
@@ -525,12 +589,15 @@ function createDesktopFolder(name, color) {
         }
     }
 
+    // Guardar posición
     if (!DesktopIconState.positions) DesktopIconState.positions = {};
     DesktopIconState.positions[folderId] = { x: pos.x, y: pos.y };
-    saveDesktopFolders();
+    saveDesktopFolders();  // persistir carpetas de escritorio
 
     container.appendChild(folderEl);
-    makeDraggableIcon(folderEl);
+    makeDraggableIcon(folderEl);  // usar la versión mejorada (con anti-superposición)
+
+    // Eventos
     folderEl.addEventListener('mousedown', (e) => { if (e.button === 0) selectDesktopIcon(folderEl); });
     folderEl.addEventListener('dblclick', () => { openDesktopFolder(name); });
     folderEl.addEventListener('contextmenu', (e) => {
@@ -798,19 +865,14 @@ function clampContextMenu(menu) {
  */
 function autoArrangeDesktopIcons() {
     const icons = Array.from(document.querySelectorAll('.desktop-icon'));
-    const rowH = 100, colW = 100;
-    const maxRows = Math.floor((window.innerHeight - 50) / rowH);
-
-    icons.forEach((icon, i) => {
-        const col = Math.floor(i / maxRows);
-        const row = i % maxRows;
-        const newX = 20 + col * colW;
-        const newY = 20 + row * rowH;
-        icon.style.left = newX + 'px';
-        icon.style.top  = newY + 'px';
-
+    const usedPositions = new Set();
+    icons.forEach((icon, idx) => {
+        let pos = getFreeGridPosition(); // ya considera ocupados
+        icon.style.left = pos.x + 'px';
+        icon.style.top = pos.y + 'px';
         if (!DesktopIconState.positions) DesktopIconState.positions = {};
-        DesktopIconState.positions[icon.id] = { x: newX, y: newY };
+        DesktopIconState.positions[icon.id] = { x: pos.x, y: pos.y };
+        // Marcar como ocupado (la función getFreeGridPosition ya lo hace internamente, pero para evitar recursión)
     });
     DesktopIconState.save();
 }
@@ -2342,35 +2404,18 @@ window.addEventListener('DOMContentLoaded', () => {
     initSettings();
     initCamera();
     initGallery();
+    initGameWindow();
+    // Llama a esta función dentro de DOMContentLoaded:
+    initMemoryGameWindow();
 
     // Restaurar carpetas de escritorio persistidas
     restoreDesktopFolders();
-
-        // Añadir iconos de cámara y galería si no existen
-    const container = document.getElementById('desktop-icons-container');
-    if (!document.getElementById('icon-camera')) {
-        const cameraIcon = document.createElement('div');
-        cameraIcon.className = 'desktop-icon';
-        cameraIcon.id = 'icon-camera';
-        cameraIcon.setAttribute('data-win', 'win-camera');
-        cameraIcon.innerHTML = `<div class="icon-wrapper"><svg viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div><span>Cámara</span>`;
-        cameraIcon.addEventListener('dblclick', () => openCamera());
-        container.appendChild(cameraIcon);
-        makeDraggableIcon(cameraIcon);
-    }
-    if (!document.getElementById('icon-gallery')) {
-        const galleryIcon = document.createElement('div');
-        galleryIcon.className = 'desktop-icon';
-        galleryIcon.id = 'icon-gallery';
-        galleryIcon.setAttribute('data-win', 'win-gallery');
-        galleryIcon.innerHTML = `<div class="icon-wrapper"><svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2"/><circle cx="8.5" cy="8.5" r="2.5"/><path d="M21 15l-5-4-3 3-4-4-5 5"/></svg></div><span>Galería</span>`;
-        galleryIcon.addEventListener('dblclick', () => openGallery());
-        container.appendChild(galleryIcon);
-        makeDraggableIcon(galleryIcon);
-    }
+    // Después de añadir los iconos de cámara y galería, y ajustar posiciones:
+    autoArrangeDesktopIcons(); // <- añade esta línea
 
     // Ajustar posiciones de los nuevos iconos (para que queden en la cuadrícula)
-    const allIcons = Array.from(container.querySelectorAll('.desktop-icon'));
+    const containerIcons = document.getElementById('desktop-icons-container');
+    const allIcons = Array.from(containerIcons.querySelectorAll('.desktop-icon'));
     allIcons.forEach((icon, idx) => {
         if (!DesktopIconState.positions[icon.id]) {
             const pos = DesktopIconState.getDefaultPosition(idx);
@@ -2461,6 +2506,118 @@ window.addEventListener('DOMContentLoaded', () => {
     openWindow('win-explorer');
 });
 
+// Inicialización del juego (similar a cámara/galería)
+    function initGameWindow() {
+        const winGame = document.getElementById('win-game');
+        let gameInstance = null;
+
+        function startGame() {
+            if (!gameInstance && typeof SnakeGame !== 'undefined') {
+                const canvas = document.getElementById('game-canvas');
+                if (canvas) {
+                    gameInstance = new SnakeGame('game-canvas');
+                    // Esperar a que la ventana se pinte y luego iniciar el bucle
+                    setTimeout(() => {
+                        if (gameInstance && !gameInstance.gameLoop && !gameInstance.gameOver) {
+                            gameInstance.start();
+                        }
+                    }, 100);
+                }
+            } else if (gameInstance && gameInstance.gameOver === false && !gameInstance.gameLoop) {
+                gameInstance.start();
+            }
+        }
+
+        function stopGame() {
+            if (gameInstance) {
+                gameInstance.stop();
+            }
+        }
+
+        // Observar cambios de visibilidad de la ventana
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mut) => {
+                if (mut.attributeName === 'style') {
+                    if (winGame.style.display === 'flex') {
+                        startGame();
+                    } else {
+                        stopGame();
+                    }
+                }
+            });
+        });
+        observer.observe(winGame, { attributes: true });
+
+        // Si la ventana ya está abierta al inicio (no debería), iniciar
+        if (winGame.style.display === 'flex') {
+            startGame();
+        }
+    }
+
+    // Inicializar juego de memoria (similar a la cámara)
+    function initMemoryGameWindow() {
+        const winMemory = document.getElementById('win-memory');
+        let memoryInstance = null;
+
+        function startMemory() {
+            if (!memoryInstance && typeof initMemoryGame === 'function') {
+                initMemoryGame();
+                memoryInstance = true;
+                // Forzar redibujado después de un breve retraso (dar tiempo a que la ventana tenga dimensiones)
+                setTimeout(() => {
+                    if (activeMemoryGame) {
+                        activeMemoryGame.resize();
+                    }
+                }, 100);
+            }
+        }
+
+        function stopMemory() {
+            if (memoryInstance && activeMemoryGame) {
+                activeMemoryGame.destroy();
+                activeMemoryGame = null;
+                memoryInstance = null;
+            }
+        }
+
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mut) => {
+                if (mut.attributeName === 'style') {
+                    if (winMemory.style.display === 'flex') {
+                        startMemory();
+                    } else {
+                        stopMemory();
+                    }
+                }
+            });
+        });
+        observer.observe(winMemory, { attributes: true });
+
+        if (winMemory.style.display === 'flex') startMemory();
+    }
+
+    // Añadir iconos de cámara y galería si no existen
+    const container = document.getElementById('desktop-icons-container');
+    if (!document.getElementById('icon-camera')) {
+        const cameraIcon = document.createElement('div');
+        cameraIcon.className = 'desktop-icon';
+        cameraIcon.id = 'icon-camera';
+        cameraIcon.setAttribute('data-win', 'win-camera');
+        cameraIcon.innerHTML = `<div class="icon-wrapper"><svg viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div><span>Cámara</span>`;
+        cameraIcon.addEventListener('dblclick', () => openCamera());
+        container.appendChild(cameraIcon);
+        makeDraggableIcon(cameraIcon);
+    }
+    if (!document.getElementById('icon-gallery')) {
+        const galleryIcon = document.createElement('div');
+        galleryIcon.className = 'desktop-icon';
+        galleryIcon.id = 'icon-gallery';
+        galleryIcon.setAttribute('data-win', 'win-gallery');
+        galleryIcon.innerHTML = `<div class="icon-wrapper"><svg viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2"/><circle cx="8.5" cy="8.5" r="2.5"/><path d="M21 15l-5-4-3 3-4-4-5 5"/></svg></div><span>Galería</span>`;
+        galleryIcon.addEventListener('dblclick', () => openGallery());
+        container.appendChild(galleryIcon);
+        makeDraggableIcon(galleryIcon);
+    }
 // --- LÓGICA DE LOGIN Y USUARIOS ---
 function initLogin() {
     const loginScreen = document.getElementById('login-screen');

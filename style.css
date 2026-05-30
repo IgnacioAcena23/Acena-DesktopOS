@@ -1977,3 +1977,47 @@ input:checked + .slider:before {
     border-radius: 6px;
     border: 1px solid rgba(255,255,255,0.2);
 }
+
+/* Estilos específicos para el juego Snake */
+#game-canvas {
+    width: 100%;
+    height: auto;
+    image-rendering: crisp-edges;
+    image-rendering: pixelated;
+    image-rendering: pixelated;
+    border-radius: 8px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.05);
+}
+
+#win-game .window-body {
+    background: #090e1a;
+}
+
+#game-score {
+    font-family: var(--font-mono);
+    letter-spacing: 1px;
+    text-shadow: 0 0 5px rgba(16, 185, 129, 0.5);
+}
+
+/* Memory Game */
+#memory-canvas {
+    width: 100%;
+    height: auto;
+    cursor: pointer;
+    border-radius: 12px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.05);
+}
+
+#memory-reset-btn {
+    transition: all 0.2s ease;
+}
+
+#memory-reset-btn:hover {
+    background: #2563eb !important;
+    transform: scale(1.02);
+}
+
+#memory-moves, #memory-timer {
+    font-family: var(--font-mono);
+    font-weight: 600;
+}

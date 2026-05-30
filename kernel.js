@@ -69,17 +69,18 @@ class VirtualFileSystem {
 
     mkdir(name) {
         let current = this.getCurrentNode();
-        if (current.children[name]) {
-            return false; // Ya existe
-        }
-        current.children[name] = new VFSNode(name, "dir");
+        if (current.type !== 'dir') return false;
+        if (current.children[name]) return false;
+        current.children[name] = new VFSNode(name, 'dir');
         this.saveToStorage();
         return true;
     }
 
     createFile(name, content = "") {
         let current = this.getCurrentNode();
-        current.children[name] = new VFSNode(name, "file", content);
+        if (current.type !== 'dir') return false;
+        if (current.children[name]) return false;
+        current.children[name] = new VFSNode(name, 'file', content);
         this.saveToStorage();
         return true;
     }
