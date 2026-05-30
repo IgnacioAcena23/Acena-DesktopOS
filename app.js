@@ -344,7 +344,11 @@ function updateTaskbarTabs() {
         { id: 'win-terminal', name: 'AceTerminal', icon: '💻' },
         { id: 'win-browser', name: 'Navegador', icon: '🌐' },
         { id: 'win-kernel', name: 'Kernel Sim', icon: '⚙️' },
-        { id: 'win-settings', name: 'Ajustes', icon: '🛠️' }
+        { id: 'win-settings', name: 'Ajustes', icon: '🛠️' },
+        { id: 'win-memory', name: 'Memory', icon: '🎴' },
+        { id: 'win-game', name: 'Snake', icon: '🐍' },
+        { id: 'win-camera', name: 'Cámara', icon: '📸' },
+        { id: 'win-gallery', name: 'Galería', icon: '🖼️' }
     ];
 
     windows.forEach(winInfo => {
@@ -809,10 +813,11 @@ function showDesktopContextMenu(x, y) {
 
     menu.querySelector('#ctx-new-folder').addEventListener('click', () => {
         removeDesktopContextMenus();
-        const name = prompt('Nombre de la nueva carpeta:', 'Nueva Carpeta');
-        if (name && name.trim()) {
-            createDesktopFolder(name.trim(), '#f59e0b');
-        }
+        customPrompt('Nombre de la nueva carpeta:', 'Nueva Carpeta', (name) => {
+            if (name && name.trim()) {
+                createDesktopFolder(name.trim(), '#f59e0b');
+            }
+        });
     });
 
     menu.querySelector('#ctx-open-explorer').addEventListener('click', () => {
@@ -846,7 +851,57 @@ function showDesktopContextMenu(x, y) {
  * Elimina todos los menús contextuales del escritorio
  */
 function removeDesktopContextMenus() {
-    document.querySelectorAll('#desktop-ctx-menu, #vfs-context-menu').forEach(m => m.remove());
+    const ctx = document.getElementById('desktop-ctx-menu');
+    if (ctx) ctx.remove();
+}
+
+/**
+ * Custom Prompt para uso general
+ */
+function customPrompt(message, defaultValue, callback) {
+    const overlay = document.getElementById('custom-prompt-overlay');
+    if (!overlay) {
+        // Fallback a prompt nativo si no existe el overlay (no debería pasar)
+        const res = prompt(message, defaultValue);
+        if (callback) callback(res);
+        return;
+    }
+    const msgEl = document.getElementById('custom-prompt-message');
+    const inputEl = document.getElementById('custom-prompt-input');
+    const btnOk = document.getElementById('custom-prompt-ok');
+    const btnCancel = document.getElementById('custom-prompt-cancel');
+
+    msgEl.textContent = message;
+    inputEl.value = defaultValue || '';
+    overlay.style.display = 'flex';
+    inputEl.focus();
+    inputEl.select();
+
+    const cleanup = () => {
+        overlay.style.display = 'none';
+        btnOk.onclick = null;
+        btnCancel.onclick = null;
+        inputEl.onkeydown = null;
+    };
+
+    btnOk.onclick = () => {
+        const val = inputEl.value;
+        cleanup();
+        if (callback) callback(val);
+    };
+
+    btnCancel.onclick = () => {
+        cleanup();
+        if (callback) callback(null);
+    };
+
+    inputEl.onkeydown = (e) => {
+        if (e.key === 'Enter') {
+            btnOk.click();
+        } else if (e.key === 'Escape') {
+            btnCancel.click();
+        }
+    };
 }
 
 /**
@@ -1541,19 +1596,21 @@ function initExplorer() {
     });
 
     document.getElementById('explorer-mkdir-btn').addEventListener('click', () => {
-        const name = prompt("Nombre de la nueva carpeta:");
-        if (name && name.trim()) {
-            if (vfs.mkdir(name.trim())) updateExplorerGrid();
-            else alert("Error al crear carpeta (ya existe o nombre inválido).");
-        } else if (name !== null) alert("El nombre no puede estar vacío.");
+        customPrompt("Nombre de la nueva carpeta:", "", (name) => {
+            if (name && name.trim()) {
+                if (vfs.mkdir(name.trim())) updateExplorerGrid();
+                else alert("Error al crear carpeta (ya existe o nombre inválido).");
+            } else if (name !== null) alert("El nombre no puede estar vacío.");
+        });
     });
 
     document.getElementById('explorer-mkfile-btn').addEventListener('click', () => {
-        const name = prompt("Nombre del archivo (ej. notas.txt):");
-        if (name && name.trim()) {
-            if (vfs.createFile(name.trim(), "Editar contenido aquí.")) updateExplorerGrid();
-            else alert("Error al crear el archivo.");
-        } else if (name !== null) alert("El nombre no puede estar vacío.");
+        customPrompt("Nombre del archivo (ej. notas.txt):", "", (name) => {
+            if (name && name.trim()) {
+                if (vfs.createFile(name.trim(), "Editar contenido aquí.")) updateExplorerGrid();
+                else alert("Error al crear el archivo.");
+            } else if (name !== null) alert("El nombre no puede estar vacío.");
+        });
     });
 }
 
