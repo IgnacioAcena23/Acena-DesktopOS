@@ -334,30 +334,37 @@ function initTaskbar() {
     initDesktopContextMenu();
 }
 
+// Actualizar la generación de pestañas en la barra de tareas para incluir ventanas de navegador dinámicas
 function updateTaskbarTabs() {
     const shortcutsContainer = document.querySelector('.taskbar-shortcuts');
     shortcutsContainer.innerHTML = '';
-
-    const windows = [
+    const windows = [];
+    // Ventanas estáticas definidas
+    const staticWindows = [
         { id: 'win-explorer', name: 'Explorador', icon: '📁' },
         { id: 'win-monitor', name: 'Task Manager', icon: '📊' },
         { id: 'win-terminal', name: 'AceTerminal', icon: '💻' },
         { id: 'win-browser', name: 'Navegador', icon: '🌐' },
-        { id: 'win-kernel', name: 'Kernel Sim', icon: '⚙️' },
+        { id: 'win-kernel', name: 'Virtual Kernel', icon: '⚙️' },
         { id: 'win-settings', name: 'Ajustes', icon: '🛠️' },
         { id: 'win-memory', name: 'Memory', icon: '🎴' },
         { id: 'win-game', name: 'Snake', icon: '🐍' },
         { id: 'win-camera', name: 'Cámara', icon: '📸' },
         { id: 'win-gallery', name: 'Galería', icon: '🖼️' }
     ];
-
+    staticWindows.forEach(w => windows.push(w));
+    // Añadir ventanas de navegador creadas dinámicamente
+    document.querySelectorAll('[id^="win-browser-"]') .forEach(el => {
+        const id = el.id;
+        const index = id.split('-').pop();
+        windows.push({ id, name: `Navegador ${index}`, icon: '🌐' });
+    });
     windows.forEach(winInfo => {
         const win = document.getElementById(winInfo.id);
         if (win && win.style.display !== 'none') {
             const tab = document.createElement('div');
             tab.className = `task-tab ${UIState.activeWindow === win ? 'active' : ''}`;
             tab.innerHTML = `<span>${winInfo.icon}</span><span>${winInfo.name}</span>`;
-
             tab.addEventListener('click', () => {
                 if (win.classList.contains('minimized')) {
                     win.classList.remove('minimized');
@@ -2249,6 +2256,34 @@ function killVirtualProcess(pid) {
 
 window.killVirtualProcess = killVirtualProcess;
 
+// Actualizar manejo del click en el menú de inicio para crear ventanas del navegador
+function initStartMenu() {
+    const startBtn = document.getElementById('start-button');
+    const startMenu = document.getElementById('start-menu');
+    startBtn.addEventListener('click', () => {
+        startMenu.classList.toggle('open');
+    });
+    // Cerrar al click fuera
+    document.addEventListener('click', (e) => {
+        if (!startMenu.contains(e.target) && e.target !== startBtn) {
+            startMenu.classList.remove('open');
+        }
+    });
+    // Manejo de items del menú
+    document.querySelectorAll('.start-app-item').forEach(item => {
+        const winId = item.getAttribute('data-win');
+        item.addEventListener('click', () => {
+            if (winId === 'win-browser') {
+                // Crear nueva ventana del navegador
+                createBrowserWindow();
+            } else {
+                openWindow(winId);
+            }
+            startMenu.classList.remove('open');
+        });
+    });
+}
+
 // --- APLICACIÓN DE AJUSTES ---
 function initSettings() {
     // Wallpapers
@@ -2452,6 +2487,7 @@ window.openGallery = openGallery;
 window.addEventListener('DOMContentLoaded', () => {
     initWindowManager();
     initTaskbar();
+    initStartMenu();
 
     // Inicializar aplicaciones
     initTerminal();
@@ -2562,6 +2598,133 @@ window.addEventListener('DOMContentLoaded', () => {
     // Abrir de bienvenida por defecto abriendo el explorador de archivos
     openWindow('win-explorer');
 });
+
+// Global counter for browser windows
+let browserWindowCount = 0;
+
+/**
+ * Crea una nueva ventana del navegador con IDs únicos y la inicializa.
+ */
+function createBrowserWindow() {
+    const template = document.getElementById('win-browser');
+    if (!template) return;
+    // Clonar el nodo y generar IDs únicos
+    const clone = template.cloneNode(true);
+    browserWindowCount++;
+    const newId = `win-browser-${browserWindowCount}`;
+    clone.id = newId;
+    // Actualizar título
+    const titleEl = clone.querySelector('.titlebar-title');
+    if (titleEl) titleEl.textContent = `AceBrowser ${browserWindowCount}`;
+    // Resetear display
+    clone.style.display = 'none';
+    // Reemplazar IDs internos para evitar colisiones
+    const idMap = {
+        'browser-url-input': `browser-url-input-${browserWindowCount}`,
+        'browser-real-view': `browser-real-view-${browserWindowCount}`,
+        'browser-downloads-view': `browser-downloads-view-${browserWindowCount}`,
+        'browser-web-fallback': `browser-web-fallback-${browserWindowCount}`,
+        'browser-webview': `browser-webview-${browserWindowCount}`,
+        'browser-btn-downloads': `browser-btn-downloads-${browserWindowCount}`,
+        'browser-btn-home': `browser-btn-home-${browserWindowCount}`,
+        'browser-btn-back': `browser-btn-back-${browserWindowCount}`,
+        'browser-btn-forward': `browser-btn-forward-${browserWindowCount}`,
+        'browser-btn-reload': `browser-btn-reload-${browserWindowCount}`,
+        'browser-loading': `browser-loading-${browserWindowCount}`
+    };
+    // Recorrer todos los elementos con atributo id y renombrarlos
+    Object.entries(idMap).forEach(([oldId, newIdVal]) => {
+        const el = clone.querySelector('#' + oldId);
+        if (el) el.id = newIdVal;
+    });
+    // Añadir al DOM
+    document.body.appendChild(clone);
+    // Inicializar lógica del navegador para esta ventana
+    initBrowserWindow(clone);
+    // Mostrar la ventana
+    openWindow(newId);
+}
+
+/**
+ * Inicializa la funcionalidad del navegador para una ventana dada.
+ * @param {HTMLElement} winEl Elemento contenedor de la ventana del navegador.
+ */
+function initBrowserWindow(winEl) {
+    // Obtener referencias de los controles dentro de winEl
+    const input = winEl.querySelector('[id^="browser-url-input-"]');
+    const viewReal = winEl.querySelector('[id^="browser-real-view-"]');
+    const viewDownloads = winEl.querySelector('[id^="browser-downloads-view-"]');
+    const webviewFallback = winEl.querySelector('[id^="browser-web-fallback-"]');
+    const webview = winEl.querySelector('[id^="browser-webview-"]');
+    const btnDownloads = winEl.querySelector('[id^="browser-btn-downloads-"]');
+    const btnHome = winEl.querySelector('[id^="browser-btn-home-"]');
+    const btnBack = winEl.querySelector('[id^="browser-btn-back-"]');
+    const btnForward = winEl.querySelector('[id^="browser-btn-forward-"]');
+    const btnReload = winEl.querySelector('[id^="browser-btn-reload-"]');
+    const loadingSpinner = winEl.querySelector('[id^="browser-loading-"]');
+
+    let showingDownloads = false;
+
+    // Si no estamos en Electron, mostrar fallback
+    if (!window.electronAPI) {
+        if (webview) webview.style.display = 'none';
+        if (webviewFallback) webviewFallback.style.display = 'flex';
+    }
+
+    // Botón Descargas
+    btnDownloads.addEventListener('click', () => {
+        showingDownloads = !showingDownloads;
+        if (showingDownloads) {
+            viewReal.style.display = 'none';
+            viewDownloads.style.display = 'flex';
+            showBrowserDownloads();
+        } else {
+            viewReal.style.display = 'flex';
+            viewDownloads.style.display = 'none';
+        }
+    });
+
+    // Botón Home
+    btnHome.addEventListener('click', () => {
+        showingDownloads = false;
+        viewReal.style.display = 'flex';
+        viewDownloads.style.display = 'none';
+        if (window.electronAPI && webview) {
+            webview.loadURL('https://www.google.com');
+        }
+        if (input) input.value = 'https://www.google.com';
+    });
+
+    // Navegación Back/Forward/Reload (simulado)
+    if (btnBack) btnBack.addEventListener('click', () => { if (window.electronAPI && webview) webview.goBack && webview.goBack(); });
+    if (btnForward) btnForward.addEventListener('click', () => { if (window.electronAPI && webview) webview.goForward && webview.goForward(); });
+    if (btnReload) btnReload.addEventListener('click', () => { if (window.electronAPI && webview) webview.reload && webview.reload(); });
+
+    // URL input handling
+    if (input) {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const url = input.value.trim();
+                if (!url) return;
+                if (window.electronAPI && webview) {
+                    loadingSpinner.style.display = 'block';
+                    webview.loadURL(url);
+                } else {
+                    // fallback: actualizar iframe src if exists
+                    const iframe = webviewFallback.querySelector('iframe');
+                    if (iframe) iframe.src = url;
+                }
+            }
+        });
+    }
+}
+
+// Reemplazar la inicialización original del navegador (se llama al cargar)
+function initBrowser() {
+    // No hacemos nada aquí, la lógica se delega a initBrowserWindow cuando se crea la ventana inicial.
+    // Crearemos la primera ventana del navegador al iniciar la aplicación.
+    createBrowserWindow();
+}
 
 // Inicialización del juego (similar a cámara/galería)
     function initGameWindow() {
