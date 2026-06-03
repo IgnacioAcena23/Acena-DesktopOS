@@ -92,9 +92,8 @@
             <div class="resize-handle b"></div>
             <div class="resize-handle se"></div>
         </div>
-        <!-- ICONOS EN EL ESCRITORIO -->
-                 <!-- VENTANA: CÁMARA -->
-        <div id="win-camera" class="window" style="display: none; width: 640px; height: 520px;">
+        <!-- VENTANA: CÁMARA -->
+        <div id="win-camera" class="window" style="display: none; width: 640px; height: 550px;">
             <div class="window-titlebar">
                 <div class="titlebar-info">
                     <svg viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -106,16 +105,39 @@
                     <button class="window-btn close"></button>
                 </div>
             </div>
-            <div class="window-body" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 15px;">
-                <video id="camera-video" autoplay playsinline style="width: 100%; max-height: 360px; background: #000; border-radius: 8px;"></video>
-                <canvas id="camera-canvas" style="display: none;"></canvas>
-                <div style="margin-top: 15px; display: flex; gap: 10px;">
-                    <button class="kernel-btn" id="camera-capture">📸 Capturar</button>
-                    <button class="kernel-btn primary" id="camera-save" disabled>💾 Guardar foto</button>
-                    <button class="kernel-btn" id="camera-close">❌ Cerrar</button>
+            <div class="window-body camera-app-body" style="display: flex; flex-direction: column; align-items: center; padding: 15px; background: #090e1a; position: relative; overflow-y: auto;">
+                <div class="camera-preview-container" style="position: relative; width: 100%; max-width: 580px; aspect-ratio: 4/3; background: #000; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;">
+                    <video id="camera-video" autoplay playsinline style="width: 100%; height: 100%; object-fit: cover; display: block;"></video>
+                    <canvas id="camera-canvas" style="display: none;"></canvas>
+                    
+                    <!-- Blinking Recording Indicator & Timer -->
+                    <div id="camera-rec-indicator" style="display: none; position: absolute; top: 15px; left: 15px; background: rgba(0, 0, 0, 0.7); color: #ef4444; font-family: monospace; font-size: 13px; font-weight: bold; padding: 5px 12px; border-radius: 20px; align-items: center; gap: 6px; z-index: 10;">
+                        <span class="rec-dot" style="width: 8px; height: 8px; background: #ef4444; border-radius: 50%; display: inline-block; animation: rec-blink 1s infinite alternate;"></span>
+                        <span id="camera-rec-text">REC</span>
+                        <span id="camera-rec-timer" style="margin-left: 5px; color: #fff;">00:00</span>
+                    </div>
                 </div>
-                <div style="margin-top: 15px;">
-                    <img id="camera-preview-img" style="max-width: 200px; max-height: 150px; border-radius: 6px; display: none;" />
+
+                <!-- Control Panel -->
+                <div class="camera-controls-panel" style="width: 100%; max-width: 580px; display: flex; align-items: center; justify-content: space-between; margin-top: 15px; padding: 10px 20px; background: rgba(255, 255, 255, 0.05); border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); box-sizing: border-box;">
+                    
+                    <!-- Left: Mode Switcher -->
+                    <div class="camera-mode-switcher" style="display: flex; background: rgba(0,0,0,0.3); padding: 3px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1);">
+                        <button class="camera-mode-btn active" id="camera-mode-photo" style="background: rgba(255,255,255,0.1); border: none; color: #fff; padding: 6px 14px; border-radius: 16px; cursor: pointer; font-size: 12px; font-weight: bold; transition: all 0.3s;">📸 Foto</button>
+                        <button class="camera-mode-btn" id="camera-mode-video" style="background: transparent; border: none; color: #aaa; padding: 6px 14px; border-radius: 16px; cursor: pointer; font-size: 12px; font-weight: bold; transition: all 0.3s;">🎥 Video</button>
+                    </div>
+
+                    <!-- Center: Big Centralized Action Button -->
+                    <div style="position: relative; display: flex; align-items: center; justify-content: center;">
+                        <button id="camera-action-btn" class="camera-action-btn photo" title="Capturar Foto" style="width: 60px; height: 60px; border-radius: 50%; border: 4px solid #fff; background: radial-gradient(circle, #ec4899 60%, transparent 62%); cursor: pointer; transition: transform 0.2s, background-color 0.2s, border-color 0.2s; outline: none; box-shadow: 0 4px 10px rgba(0,0,0,0.3);"></button>
+                    </div>
+
+                    <!-- Right: Small grid/thumbnail for the last captured photo/video -->
+                    <div id="camera-last-thumbnail-container" style="display: flex; flex-direction: column; align-items: center;">
+                        <div id="camera-last-thumbnail" style="width: 48px; height: 48px; border-radius: 8px; border: 2px solid rgba(255,255,255,0.2); overflow: hidden; background: rgba(0,0,0,0.3); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.2s, border-color 0.2s;" title="Ver Galería">
+                            <span style="font-size: 9px; color: #aaa; text-align: center; line-height: 1.1;">Sin foto</span>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="resize-handle r"></div>
@@ -136,8 +158,8 @@
                     <button class="window-btn close"></button>
                 </div>
             </div>
-            <div class="window-body">
-                <div class="gallery-grid" id="gallery-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 15px; padding: 15px; overflow-y: auto; height: 100%;">
+            <div class="window-body" style="background: #0b0f19;">
+                <div class="gallery-grid" id="gallery-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 15px; padding: 15px; overflow-y: auto; height: 100%; box-sizing: border-box;">
                     <!-- Las imágenes se cargarán dinámicamente -->
                 </div>
             </div>
@@ -147,9 +169,15 @@
         </div>
 
         <!-- VISOR DE PANTALLA COMPLETA PARA GALERÍA -->
-        <div id="gallery-fullscreen" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 100000; align-items: center; justify-content: center;">
-            <img id="gallery-fullscreen-img" style="max-width: 90%; max-height: 90%; object-fit: contain;" />
-            <button id="gallery-close-fullscreen" style="position: absolute; top: 20px; right: 30px; background: var(--color-danger); border: none; color: white; padding: 8px 16px; border-radius: 8px; cursor: pointer;">Cerrar</button>
+        <div id="gallery-fullscreen" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(5,7,12,0.95); z-index: 100000; align-items: center; justify-content: center; flex-direction: column; gap: 20px;">
+            <div id="gallery-fullscreen-content" style="max-width: 90%; max-height: 80%; display: flex; align-items: center; justify-content: center;">
+                <img id="gallery-fullscreen-img" style="max-width: 100%; max-height: 100%; object-fit: contain; display: none; box-shadow: 0 5px 25px rgba(0,0,0,0.8); border-radius: 8px;" />
+                <video id="gallery-fullscreen-video" controls autoplay style="max-width: 100%; max-height: 100%; display: none; box-shadow: 0 5px 25px rgba(0,0,0,0.8); border-radius: 8px;"></video>
+            </div>
+            <div style="display: flex; gap: 15px;">
+                <button id="gallery-delete-current" style="background: #ef4444; border: none; color: white; padding: 10px 24px; border-radius: 20px; cursor: pointer; font-weight: bold; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 10px rgba(239,68,68,0.3); transition: transform 0.2s;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg> Borrar</button>
+                <button id="gallery-close-fullscreen" style="background: rgba(255,255,255,0.15); border: none; color: white; padding: 10px 24px; border-radius: 20px; cursor: pointer; font-weight: bold; transition: background 0.2s;">Cerrar</button>
+            </div>
         </div>
         <div class="desktop-icons" id="desktop-icons-container">
             <div class="desktop-icon" id="icon-memory" data-win="win-memory">
@@ -649,6 +677,34 @@
             <div class="resize-handle se"></div>
         </div>
 
+        <!-- VENTANA: USB EXPLORER -->
+        <div id="win-usb" class="window" style="display: none; width: 680px; height: 480px; top: 80px; left: 100px;">
+            <div class="window-titlebar">
+                <div class="titlebar-info">
+                    <span style="margin-right:8px; font-size:16px;">💾</span>
+                    <span class="titlebar-title" id="usb-win-title">Pendrive</span>
+                </div>
+                <div class="titlebar-controls">
+                    <button class="window-btn minimize"></button>
+                    <button class="window-btn maximize"></button>
+                    <button class="window-btn close"></button>
+                </div>
+            </div>
+            <div class="window-body" style="display: flex; flex-direction: column; background: #090e1a; height: 100%; overflow: hidden;">
+                <div id="usb-breadcrumb" style="padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.08); font-size: 12px; color: #9ca3af; background: rgba(0,0,0,0.3);">
+                    📂 /
+                </div>
+                <div id="usb-file-list" class="custom-scroll" style="flex: 1; overflow-y: auto; padding: 8px;">
+                    <!-- Generado dinámicamente -->
+                </div>
+                <div id="usb-preview" class="custom-scroll" style="height: 140px; border-top: 1px solid rgba(255,255,255,0.08); padding: 8px; overflow: auto; display: none; background: #0a0f1a;">
+                </div>
+            </div>
+            <div class="resize-handle r"></div>
+            <div class="resize-handle b"></div>
+            <div class="resize-handle se"></div>
+        </div>
+
         <!-- VENTANA: AJUSTES (SETTINGS) -->
         <div id="win-settings" class="window" style="display: none;">
             <div class="window-titlebar">
@@ -845,12 +901,14 @@
             </div>
             <div style="display:flex; gap:10px;">
                 <span style="font-size:12px; cursor:pointer;" id="menu-switch-user">🔄 Cambiar Usuario</span>
-                <span style="font-size:12px; cursor:pointer;" onclick="document.getElementById('start-menu').classList.remove('open'); alert('Sesión cerrada.');">🔒 Apagar</span>
+                <span style="font-size:16px; cursor:pointer;" title="Apagar" onclick="if(confirm('¿Quiere abandonar el sistema?')) { if (window.electronAPI) window.electronAPI.quitApp(); else window.close(); }">⏻</span>
             </div>
         </div>
     </div>
 
+
     <!-- CUSTOM PROMPT MODAL -->
+
     <div id="custom-prompt-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 999999; align-items: center; justify-content: center;">
         <div style="background: var(--bg-window); border: var(--border-window); border-radius: 8px; padding: 20px; box-shadow: var(--shadow-active); backdrop-filter: blur(10px); min-width: 300px;">
             <div id="custom-prompt-message" style="margin-bottom: 15px; font-weight: 500; font-size: 14px;"></div>

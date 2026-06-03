@@ -11,5 +11,14 @@
   "license": "MIT",
   "devDependencies": {
     "electron": "^35.0.0"
+  },
+  "dependencies": {
+    "usb-detection": "^4.12.0",
+    "chokidar": "^3.5.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "usb-detection"
+    ]
   }
 }

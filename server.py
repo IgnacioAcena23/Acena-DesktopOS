@@ -291,6 +291,33 @@ class OSRequestHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"success": success}).encode('utf-8'))
             
+        elif path == '/api/usb/list':
+            dir_path = query.get('path', [''])[0]
+            if not dir_path or not os.path.isdir(dir_path):
+                # Simular un pendrive de demostración
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps([
+                    {"name": "Fotos",         "isDir": True,  "ext": ""},
+                    {"name": "musica.mp3",    "isDir": False, "ext": ".mp3"},
+                    {"name": "documento.txt", "isDir": False, "ext": ".txt"},
+                ]).encode('utf-8'))
+                return
+            entries = []
+            for name in os.listdir(dir_path):
+                full = os.path.join(dir_path, name)
+                entries.append({
+                    "name": name,
+                    "isDir": os.path.isdir(full),
+                    "fullPath": full,
+                    "ext": os.path.splitext(name)[1].lower()
+                })
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(entries).encode('utf-8'))
+            
         else:
             # Servir archivo estático (index.html, style.css, app.js, kernel.js)
             super().do_GET()

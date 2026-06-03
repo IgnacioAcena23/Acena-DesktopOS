@@ -305,30 +305,6 @@ function initTaskbar() {
     updateClock();
     setInterval(updateClock, 1000);
 
-    // Menú Inicio
-    const startButton = document.getElementById('start-button');
-    const startMenu = document.getElementById('start-menu');
-
-    startButton.addEventListener('click', (e) => {
-        e.stopPropagation();
-        startMenu.classList.toggle('open');
-    });
-
-    document.addEventListener('click', (e) => {
-        if (!startMenu.contains(e.target) && e.target !== startButton) {
-            startMenu.classList.remove('open');
-        }
-    });
-
-    // Accesos del Menú de Inicio
-    document.querySelectorAll('.start-app-item').forEach(item => {
-        item.addEventListener('click', () => {
-            const winId = item.getAttribute('data-win');
-            openWindow(winId);
-            startMenu.classList.remove('open');
-        });
-    });
-
     // Iconos de Escritorio — inicializar con el nuevo sistema de posición libre
     initDesktopIcons();
     initDesktopContextMenu();
@@ -450,7 +426,11 @@ function initDesktopIcons() {
         // Doble click: abrir ventana o carpeta
         icon.addEventListener('dblclick', () => {
             const winId = icon.getAttribute('data-win');
-            if (winId) openWindow(winId);
+            if (winId === 'win-browser') {
+                createBrowserWindow();
+            } else if (winId) {
+                openWindow(winId);
+            }
         });
     });
 
@@ -2260,12 +2240,29 @@ window.killVirtualProcess = killVirtualProcess;
 function initStartMenu() {
     const startBtn = document.getElementById('start-button');
     const startMenu = document.getElementById('start-menu');
-    startBtn.addEventListener('click', () => {
+    startBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
         startMenu.classList.toggle('open');
     });
-    // Cerrar al click fuera
+
+    // Escuchar la tecla física de Windows / Meta via Electron IPC
+    if (window.electronAPI && window.electronAPI.onToggleStartMenu) {
+        window.electronAPI.onToggleStartMenu(() => {
+            startMenu.classList.toggle('open');
+        });
+    }
+
+    // Keydown fallback a nivel documento en el renderer
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Meta') {
+            e.preventDefault();
+            startMenu.classList.toggle('open');
+        }
+    });
+
+    // Cerrar al click fuera — usar contains() para manejar SVG hijos correctamente
     document.addEventListener('click', (e) => {
-        if (!startMenu.contains(e.target) && e.target !== startBtn) {
+        if (!startMenu.contains(e.target) && !startBtn.contains(e.target)) {
             startMenu.classList.remove('open');
         }
     });
@@ -2387,100 +2384,386 @@ function playExternalDeviceSound() {
 function initCamera() {
     const video = document.getElementById('camera-video');
     const canvas = document.getElementById('camera-canvas');
-    const captureBtn = document.getElementById('camera-capture');
-    const saveBtn = document.getElementById('camera-save');
-    const closeBtn = document.getElementById('camera-close');
-    let capturedImageData = null;
+    const modePhotoBtn = document.getElementById('camera-mode-photo');
+    const modeVideoBtn = document.getElementById('camera-mode-video');
+    const actionBtn = document.getElementById('camera-action-btn');
+    const recIndicator = document.getElementById('camera-rec-indicator');
+    const recTimer = document.getElementById('camera-rec-timer');
+    const thumbnail = document.getElementById('camera-last-thumbnail');
+
+    let currentMode = 'photo'; // 'photo' o 'video'
+    let isRecording = false;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let timerInterval = null;
+    let secondsRecorded = 0;
 
     async function startCamera() {
-        if (UIState.cameraStream) UIState.cameraStream.getTracks().forEach(track => track.stop());
+        if (UIState.cameraStream) {
+            UIState.cameraStream.getTracks().forEach(track => track.stop());
+        }
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             video.srcObject = stream;
             UIState.cameraStream = stream;
             video.play();
-        } catch (err) { alert("No se pudo acceder a la cámara: " + err.message); }
+            updateCameraThumbnail();
+        } catch (err) {
+            // Intentar sin audio si falla por micrófono no disponible
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                UIState.cameraStream = stream;
+                video.play();
+                updateCameraThumbnail();
+            } catch (errFallback) {
+                alert("No se pudo acceder a la cámara: " + errFallback.message);
+            }
+        }
     }
 
-    captureBtn.addEventListener('click', () => {
-        const context = canvas.getContext('2d');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-        capturedImageData = canvas.toDataURL('image/png');
-        const preview = document.getElementById('camera-preview-img');
-        preview.src = capturedImageData;
-        preview.style.display = 'block';
-        saveBtn.disabled = false;
+    // Selector de Modo Foto
+    modePhotoBtn.addEventListener('click', () => {
+        if (isRecording) stopRecording();
+        currentMode = 'photo';
+        modePhotoBtn.classList.add('active');
+        modePhotoBtn.style.background = 'rgba(255,255,255,0.1)';
+        modePhotoBtn.style.color = '#fff';
+        modeVideoBtn.classList.remove('active');
+        modeVideoBtn.style.background = 'transparent';
+        modeVideoBtn.style.color = '#aaa';
+
+        actionBtn.className = 'camera-action-btn photo';
+        actionBtn.title = 'Capturar Foto';
+        actionBtn.style.background = 'radial-gradient(circle, #ec4899 60%, transparent 62%)';
     });
 
-    saveBtn.addEventListener('click', () => {
-        if (!capturedImageData) return;
+    // Selector de Modo Video
+    modeVideoBtn.addEventListener('click', () => {
+        currentMode = 'video';
+        modeVideoBtn.classList.add('active');
+        modeVideoBtn.style.background = 'rgba(255,255,255,0.1)';
+        modeVideoBtn.style.color = '#fff';
+        modePhotoBtn.classList.remove('active');
+        modePhotoBtn.style.background = 'transparent';
+        modePhotoBtn.style.color = '#aaa';
+
+        actionBtn.className = 'camera-action-btn video';
+        actionBtn.title = 'Grabar Video';
+        actionBtn.style.background = 'radial-gradient(circle, #ef4444 60%, transparent 62%)';
+    });
+
+    // Botón de Acción Centralizado
+    actionBtn.addEventListener('click', () => {
+        if (currentMode === 'photo') {
+            takePhoto();
+        } else {
+            if (!isRecording) {
+                startRecording();
+            } else {
+                stopRecording();
+            }
+        }
+    });
+
+    // Capturar Foto
+    function takePhoto() {
+        // Reproducir sonido simulado
+        try {
+            playSystemSound();
+        } catch (e) {}
+
+        const context = canvas.getContext('2d');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/png');
+        
         const timestamp = Date.now();
         const filename = `camera_${timestamp}.png`;
+        saveMedia(filename, dataUrl);
+    }
+
+    // Iniciar Grabación de Video
+    function startRecording() {
+        if (!UIState.cameraStream) return;
+        recordedChunks = [];
+        
+        let options = { mimeType: 'video/webm;codecs=vp9' };
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            options = { mimeType: 'video/webm;codecs=vp8' };
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                options = { mimeType: 'video/webm' };
+            }
+        }
+        
+        try {
+            mediaRecorder = new MediaRecorder(UIState.cameraStream, options);
+        } catch (e) {
+            mediaRecorder = new MediaRecorder(UIState.cameraStream);
+        }
+
+        mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+                recordedChunks.push(event.data);
+            }
+        };
+
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(recordedChunks, { type: 'video/webm' });
+            const reader = new FileReader();
+            reader.readAsDataURL(blob);
+            reader.onloadend = () => {
+                const base64Data = reader.result;
+                const timestamp = Date.now();
+                const filename = `video_${timestamp}.webm`;
+                saveMedia(filename, base64Data);
+            };
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        actionBtn.classList.add('video-recording');
+        recIndicator.style.display = 'flex';
+        
+        secondsRecorded = 0;
+        recTimer.textContent = '00:00';
+        timerInterval = setInterval(() => {
+            secondsRecorded++;
+            const mins = String(Math.floor(secondsRecorded / 60)).padStart(2, '0');
+            const secs = String(secondsRecorded % 60).padStart(2, '0');
+            recTimer.textContent = `${mins}:${secs}`;
+        }, 1000);
+    }
+
+    // Detener Grabación
+    function stopRecording() {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+        }
+        isRecording = false;
+        actionBtn.classList.remove('video-recording');
+        recIndicator.style.display = 'none';
+        clearInterval(timerInterval);
+    }
+
+    // Guardar Media en VFS
+    function saveMedia(filename, content) {
         if (typeof vfs !== 'undefined') {
             if (!vfs.root.children['home']) vfs.mkdir('home');
-            if (!vfs.root.children['home'].children['Pictures']) vfs.root.children['home'].children['Pictures'] = new VFSNode('Pictures', 'dir');
+            if (!vfs.root.children['home'].children['Pictures']) {
+                vfs.root.children['home'].children['Pictures'] = new VFSNode('Pictures', 'dir');
+            }
             const pictures = vfs.root.children['home'].children['Pictures'];
-            pictures.children[filename] = new VFSNode(filename, 'file', capturedImageData);
+            pictures.children[filename] = new VFSNode(filename, 'file', content);
             vfs.saveToStorage();
-            vfs.appendLog(`Foto guardada: ${filename}`);
-            alert(`Foto guardada en /home/Pictures/${filename}`);
-            capturedImageData = null;
-            saveBtn.disabled = true;
-            document.getElementById('camera-preview-img').style.display = 'none';
-        } else alert("VFS no disponible");
-    });
+            vfs.appendLog(`Media guardada: ${filename}`);
+            
+            updateCameraThumbnail();
+            
+            // Si la galería está abierta, forzar su recarga
+            const winGallery = document.getElementById('win-gallery');
+            if (winGallery && winGallery.style.display === 'flex') {
+                loadGallery();
+            }
+        }
+    }
 
-    closeBtn.addEventListener('click', () => {
-        if (UIState.cameraStream) { UIState.cameraStream.getTracks().forEach(track => track.stop()); UIState.cameraStream = null; }
-        document.getElementById('win-camera').style.display = 'none';
+    // Actualizar miniatura de última captura
+    function updateCameraThumbnail() {
+        if (typeof vfs === 'undefined') return;
+        const picturesDir = vfs.root.children['home']?.children['Pictures'];
+        if (!picturesDir) return;
+        const files = Object.values(picturesDir.children).filter(node => node.type === 'file' && /\.(png|jpg|jpeg|webm|mp4)$/i.test(node.name));
+        if (files.length > 0) {
+            files.sort((a, b) => b.name.localeCompare(a.name));
+            const latest = files[0];
+            
+            const isVideo = latest.name.endsWith('.webm') || latest.name.endsWith('.mp4');
+            if (isVideo) {
+                thumbnail.innerHTML = `<div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:#000;">
+                    <span style="font-size: 20px;">🎥</span>
+                    <div style="position:absolute; bottom:0; background:rgba(0,0,0,0.6); width:100%; font-size:8px; color:#fff; text-align:center;">Video</div>
+                </div>`;
+            } else {
+                thumbnail.innerHTML = `<img src="${latest.content}" style="width:100%; height:100%; object-fit:cover;" />`;
+            }
+            thumbnail.style.borderColor = '#ec4899';
+        } else {
+            thumbnail.innerHTML = `<span style="font-size: 9px; color: #aaa; text-align: center; line-height: 1.1;">Sin foto</span>`;
+            thumbnail.style.borderColor = 'rgba(255,255,255,0.2)';
+        }
+    }
+
+    thumbnail.addEventListener('click', () => {
+        openGallery();
     });
 
     const winCamera = document.getElementById('win-camera');
     const observer = new MutationObserver((mutations) => {
-        if (winCamera.style.display === 'flex') startCamera();
-        else if (UIState.cameraStream) { UIState.cameraStream.getTracks().forEach(track => track.stop()); UIState.cameraStream = null; }
+        if (winCamera.style.display === 'flex') {
+            startCamera();
+        } else {
+            if (isRecording) stopRecording();
+            if (UIState.cameraStream) {
+                UIState.cameraStream.getTracks().forEach(track => track.stop());
+                UIState.cameraStream = null;
+            }
+        }
     });
     observer.observe(winCamera, { attributes: true, attributeFilter: ['style'] });
+    
+    // Inicializar miniatura
+    updateCameraThumbnail();
+    window.updateCameraThumbnail = updateCameraThumbnail;
 }
 
 function initGallery() {
     const galleryGrid = document.getElementById('gallery-grid');
     const fullscreenView = document.getElementById('gallery-fullscreen');
     const fullscreenImg = document.getElementById('gallery-fullscreen-img');
+    const fullscreenVideo = document.getElementById('gallery-fullscreen-video');
     const closeFullscreen = document.getElementById('gallery-close-fullscreen');
+    const deleteCurrentBtn = document.getElementById('gallery-delete-current');
+
+    let currentFullscreenNode = null;
 
     function loadGallery() {
         galleryGrid.innerHTML = '';
         const picturesDir = vfs.root.children['home']?.children['Pictures'];
-        if (!picturesDir) { galleryGrid.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">No hay imágenes. Usa la Cámara para tomar fotos.</p>'; return; }
-        const imageFiles = Object.values(picturesDir.children).filter(node => node.type === 'file' && /\.(png|jpg|jpeg)$/i.test(node.name));
-        if (imageFiles.length === 0) { galleryGrid.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">No hay imágenes. Usa la Cámara para tomar fotos.</p>'; return; }
-        imageFiles.forEach(imgNode => {
+        if (!picturesDir) {
+            galleryGrid.innerHTML = '<p style="color:var(--text-secondary); text-align:center; grid-column: 1/-1; padding: 20px;">No hay imágenes ni videos. Usa la Cámara.</p>';
+            return;
+        }
+        const mediaFiles = Object.values(picturesDir.children).filter(node => node.type === 'file' && /\.(png|jpg|jpeg|webm|mp4)$/i.test(node.name));
+        if (mediaFiles.length === 0) {
+            galleryGrid.innerHTML = '<p style="color:var(--text-secondary); text-align:center; grid-column: 1/-1; padding: 20px;">No hay imágenes ni videos. Usa la Cámara.</p>';
+            return;
+        }
+
+        mediaFiles.sort((a, b) => b.name.localeCompare(a.name));
+
+        mediaFiles.forEach(mediaNode => {
             const card = document.createElement('div');
             card.className = 'gallery-item';
-            const img = document.createElement('img');
-            img.src = imgNode.content;
-            img.alt = imgNode.name;
+
+            const mediaContainer = document.createElement('div');
+            mediaContainer.className = 'gallery-item-media-container';
+
+            const isVideo = mediaNode.name.endsWith('.webm') || mediaNode.name.endsWith('.mp4');
+
+            if (isVideo) {
+                const videoEl = document.createElement('video');
+                videoEl.src = mediaNode.content;
+                videoEl.muted = true;
+                videoEl.playsInline = true;
+                mediaContainer.appendChild(videoEl);
+
+                const badge = document.createElement('div');
+                badge.className = 'gallery-video-badge';
+                badge.innerHTML = '▶';
+                mediaContainer.appendChild(badge);
+            } else {
+                const img = document.createElement('img');
+                img.src = mediaNode.content;
+                img.alt = mediaNode.name;
+                mediaContainer.appendChild(img);
+            }
+
+            // Botón de Borrar (sobre la tarjeta)
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'gallery-item-delete';
+            deleteBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+            deleteBtn.title = 'Borrar';
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (confirm(`¿Estás seguro de que quieres borrar "${mediaNode.name}"?`)) {
+                    deleteMedia(mediaNode.name);
+                }
+            });
+            card.appendChild(deleteBtn);
+
             const span = document.createElement('span');
-            span.textContent = imgNode.name;
-            card.appendChild(img);
+            span.textContent = mediaNode.name;
+
+            card.appendChild(mediaContainer);
             card.appendChild(span);
-            card.addEventListener('click', () => { fullscreenImg.src = imgNode.content; fullscreenView.style.display = 'flex'; });
+
+            card.addEventListener('click', () => {
+                openFullscreenMedia(mediaNode);
+            });
             galleryGrid.appendChild(card);
         });
     }
 
-    closeFullscreen.addEventListener('click', () => { fullscreenView.style.display = 'none'; fullscreenImg.src = ''; });
+    function openFullscreenMedia(node) {
+        currentFullscreenNode = node;
+        const isVideo = node.name.endsWith('.webm') || node.name.endsWith('.mp4');
+        if (isVideo) {
+            fullscreenImg.style.display = 'none';
+            fullscreenVideo.src = node.content;
+            fullscreenVideo.style.display = 'block';
+            fullscreenVideo.play();
+        } else {
+            fullscreenVideo.style.display = 'none';
+            fullscreenVideo.src = '';
+            fullscreenImg.src = node.content;
+            fullscreenImg.style.display = 'block';
+        }
+        fullscreenView.style.display = 'flex';
+    }
+
+    function closeFullscreenMedia() {
+        fullscreenView.style.display = 'none';
+        fullscreenImg.src = '';
+        fullscreenVideo.src = '';
+        fullscreenVideo.style.display = 'none';
+        currentFullscreenNode = null;
+    }
+
+    function deleteMedia(name) {
+        const picturesDir = vfs.root.children['home']?.children['Pictures'];
+        if (picturesDir && picturesDir.children[name]) {
+            delete picturesDir.children[name];
+            vfs.saveToStorage();
+            vfs.appendLog(`Archivo borrado: ${name}`);
+            
+            if (currentFullscreenNode && currentFullscreenNode.name === name) {
+                closeFullscreenMedia();
+            }
+            
+            loadGallery();
+            if (window.updateCameraThumbnail) {
+                window.updateCameraThumbnail();
+            }
+        }
+    }
+
+    closeFullscreen.addEventListener('click', closeFullscreenMedia);
+    
+    deleteCurrentBtn.addEventListener('click', () => {
+        if (currentFullscreenNode) {
+            if (confirm(`¿Estás seguro de que quieres borrar "${currentFullscreenNode.name}"?`)) {
+                deleteMedia(currentFullscreenNode.name);
+            }
+        }
+    });
 
     const winGallery = document.getElementById('win-gallery');
-    const observer = new MutationObserver((mutations) => { if (winGallery.style.display === 'flex') loadGallery(); });
+    const observer = new MutationObserver((mutations) => {
+        if (winGallery.style.display === 'flex') {
+            loadGallery();
+        }
+    });
     observer.observe(winGallery, { attributes: true, attributeFilter: ['style'] });
+    
+    window.loadGallery = loadGallery;
 }
 
 function openCamera() { openWindow('win-camera'); }
 function openGallery() { openWindow('win-gallery'); }
+window.openCamera = openCamera;
+window.openGallery = openGallery;
 window.openCamera = openCamera;
 window.openGallery = openGallery;
 
@@ -2488,6 +2771,7 @@ window.addEventListener('DOMContentLoaded', () => {
     initWindowManager();
     initTaskbar();
     initStartMenu();
+    initLogin();
 
     // Inicializar aplicaciones
     initTerminal();
@@ -2538,8 +2822,7 @@ window.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Sistema de Login
-    initLogin();
+    // Sistema de Login (Removido duplicado para evitar doble binding de eventos)
 
     // Detección de dispositivos externos (USB)
     if (navigator.usb) {
@@ -2596,7 +2879,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
 
     // Abrir de bienvenida por defecto abriendo el explorador de archivos
-    openWindow('win-explorer');
+    // openWindow('win-explorer');
 });
 
 // Global counter for browser windows
@@ -2638,7 +2921,7 @@ function createBrowserWindow() {
         if (el) el.id = newIdVal;
     });
     // Añadir al DOM
-    document.body.appendChild(clone);
+    document.getElementById('desktop').appendChild(clone);
     // Inicializar lógica del navegador para esta ventana
     initBrowserWindow(clone);
     // Mostrar la ventana
@@ -2723,7 +3006,7 @@ function initBrowserWindow(winEl) {
 function initBrowser() {
     // No hacemos nada aquí, la lógica se delega a initBrowserWindow cuando se crea la ventana inicial.
     // Crearemos la primera ventana del navegador al iniciar la aplicación.
-    createBrowserWindow();
+    // createBrowserWindow();
 }
 
 // Inicialización del juego (similar a cámara/galería)
@@ -2852,9 +3135,15 @@ function initLogin() {
 
     let currentUser = 'Ignacio';
 
+    const USER_PASSWORDS = {
+        'Ignacio':  '1234',
+        'Invitado': '',       // Sin contraseña
+        'Admin':    'admin'
+    };
+
     function attemptLogin() {
-        // Validación de contraseña ficticia
-        if (loginPassword.value === '1234' || loginPassword.value === '') {
+        const expected = USER_PASSWORDS[currentUser] || '1234';
+        if (loginPassword.value === expected) {
             loginScreen.classList.remove('show');
             loginPassword.value = '';
             loginError.textContent = '';
@@ -2864,6 +3153,8 @@ function initLogin() {
             if (typeof vfs !== 'undefined' && vfs.appendLog) vfs.appendLog(`Sesión iniciada como: ${currentUser}`);
         } else {
             loginError.textContent = 'Contraseña incorrecta';
+            loginPassword.value = '';
+            loginPassword.focus();
         }
     }
 
@@ -2925,38 +3216,7 @@ function mountUSBDevice() {
 
     updateExplorerGrid();
 
-    // Añadir icono temporal al escritorio
-    if (!document.getElementById('icon-usb0')) {
-        const desktopIcons = document.getElementById('desktop-icons-container');
-        const usbIcon = document.createElement('div');
-        usbIcon.className = 'desktop-icon';
-        usbIcon.id = 'icon-usb0';
-        usbIcon.innerHTML = `
-            <div class="icon-wrapper">
-                <svg viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M4 10h16v10H4z"/><path d="M8 4h8v6H8z"/></svg>
-            </div>
-            <span>Unidad USB</span>
-        `;
-        usbIcon.addEventListener('dblclick', () => {
-            openWindow('win-explorer');
-            vfs.currentPath = ['usb0'];
-            document.getElementById('path-bar-text').textContent = '/usb0';
-            updateExplorerGrid();
-        });
-        desktopIcons.appendChild(usbIcon);
-
-        // Hacerlo arrastrable como el resto de iconos del escritorio
-        if (!DesktopIconState.positions) DesktopIconState.positions = {};
-        if (!DesktopIconState.positions['icon-usb0']) {
-            const allIcons = desktopIcons.querySelectorAll('.desktop-icon').length;
-            DesktopIconState.positions['icon-usb0'] = DesktopIconState.getDefaultPosition(allIcons - 1);
-            DesktopIconState.save();
-        }
-        const usbPos = DesktopIconState.positions['icon-usb0'];
-        usbIcon.style.left = usbPos.x + 'px';
-        usbIcon.style.top  = usbPos.y + 'px';
-        makeDraggableIcon(usbIcon);
-    }
+    // El icono del pendrive temporal de prueba en el escritorio fue removido por solicitud del usuario.
 
     // Añadir a sidebar del explorador
     const sidebar = document.getElementById('explorer-sidebar');
@@ -2998,3 +3258,170 @@ function unmountUSBDevice() {
 
 window.mountUSBDevice = mountUSBDevice;
 window.unmountUSBDevice = unmountUSBDevice;
+
+// ── Estado del explorador USB Real ─────────────────────────────
+let usbCurrentPath  = null;
+let usbMountRoot    = null;
+let usbDeviceLabel  = 'Pendrive';
+
+if (window.electronAPI && window.electronAPI.isElectron) {
+  window.electronAPI.onUsbInserted((data) => {
+    usbMountRoot   = data.mountPath;
+    usbDeviceLabel = data.label;
+    const titleEl = document.getElementById('usb-win-title');
+    if (titleEl) titleEl.textContent = data.label;
+
+    if (typeof vfs !== 'undefined' && vfs.appendLog) {
+       vfs.appendLog(`💾 Dispositivo USB detectado: ${data.label}`);
+    }
+
+    openWindow('win-usb');
+    navigateUsb(data.mountPath);
+  });
+
+  window.electronAPI.onUsbRemoved(() => {
+    const winUsb = document.getElementById('win-usb');
+    if (winUsb) closeWindow(winUsb);
+    usbMountRoot   = null;
+    usbCurrentPath = null;
+  });
+
+  window.electronAPI.onUsbChanged(() => {
+    if (usbCurrentPath) navigateUsb(usbCurrentPath);
+  });
+}
+
+async function navigateUsb(dirPath) {
+  if (!window.electronAPI || !window.electronAPI.isElectron) return;
+  usbCurrentPath = dirPath;
+
+  const rel = dirPath.replace(usbMountRoot, '') || '/';
+  const breadcrumb = document.getElementById('usb-breadcrumb');
+  if (breadcrumb) breadcrumb.textContent = `💾 ${usbDeviceLabel}${rel}`;
+
+  const entries = await window.electronAPI.readUsbDir(dirPath);
+  const list = document.getElementById('usb-file-list');
+  if (!list) return;
+  list.innerHTML = '';
+
+  if (dirPath !== usbMountRoot) {
+    const parent = dirPath.substring(0, dirPath.lastIndexOf('\\')) || dirPath.substring(0, dirPath.lastIndexOf('/'));
+    list.insertAdjacentHTML('beforeend',
+      `<div class="usb-entry" onclick="navigateUsb('${parent.replace(/\\/g, '\\\\')}')">
+        <span class="usb-icon">⬆</span><span class="usb-name">..</span>
+       </div>`
+    );
+  }
+
+  entries.forEach(entry => {
+    const icon = entry.isDir ? '📁' : getFileIcon(entry.ext);
+    const row  = document.createElement('div');
+    row.className = 'usb-entry';
+    row.innerHTML = `<span class="usb-icon">${icon}</span><span class="usb-name">${entry.name}</span>`;
+    row.onclick   = () => entry.isDir ? navigateUsb(entry.fullPath) : previewFile(entry);
+    list.appendChild(row);
+  });
+}
+
+async function previewFile(entry) {
+  const preview = document.getElementById('usb-preview');
+  if (!preview) return;
+  preview.style.display = 'block';
+  preview.innerHTML = '<span style="color:#9ca3af">Cargando...</span>';
+
+  const imgExts   = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+  const textExts  = ['.txt', '.md', '.js', '.html', '.css', '.json', '.py', '.log', '.csv'];
+  const audioExts = ['.mp3', '.wav', '.ogg', '.flac', '.aac'];
+  const videoExts = ['.mp4', '.webm', '.mov'];
+
+  if (imgExts.includes(entry.ext)) {
+    const b64 = await window.electronAPI.readUsbImageFile(entry.fullPath);
+    if (b64) preview.innerHTML = `<img src="${b64}" style="max-height:130px; border-radius:6px;">`;
+  } else if (textExts.includes(entry.ext)) {
+    const text = await window.electronAPI.readUsbTextFile(entry.fullPath);
+    preview.innerHTML = `<pre style="margin:0; font-size:11px; color:#e2e8f0; white-space:pre-wrap;">${escapeHtml(text)}</pre>`;
+  } else if (audioExts.includes(entry.ext)) {
+    preview.innerHTML = `<audio controls style="width:100%" src="file://${entry.fullPath.replace(/\\/g,'/')}"></audio>`;
+  } else if (videoExts.includes(entry.ext)) {
+    preview.innerHTML = `<video controls style="max-height:130px; border-radius:6px;" src="file://${entry.fullPath.replace(/\\/g,'/')}"></video>`;
+  } else {
+    preview.innerHTML = `<span style="color:#9ca3af; font-size:12px;">Sin vista previa para ${entry.ext}</span>`;
+  }
+}
+
+function getFileIcon(ext) {
+  const map = {
+    '.mp3': '🎵', '.flac': '🎵', '.wav': '🎵', '.ogg': '🎵',
+    '.mp4': '🎬', '.mov': '🎬', '.webm': '🎬',
+    '.jpg': '🖼️', '.jpeg': '🖼️', '.png': '🖼️', '.gif': '🖼️',
+    '.pdf': '📄', '.zip': '🗜️', '.rar': '🗜️', '.7z': '🗜️',
+    '.txt': '📝', '.md': '📝', '.js': '💻', '.py': '💻', '.html': '💻', '.css': '💻',
+  };
+  return map[ext] || '📄';
+}
+
+function escapeHtml(str) {
+  return str ? str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : '';
+}
+window.navigateUsb = navigateUsb;
+
+// ── Cambio de Usuario con contraseña ─────────────────────────
+(function initLoginOverlay() {
+    // Contraseñas por usuario (simuladas)
+    const USER_PASSWORDS = {
+        'Ignacio':  '1234',
+        'Invitado': '',       // Sin contraseña
+        'Admin':    'admin'
+    };
+
+    const overlay  = document.getElementById('login-overlay');
+    const passInput = document.getElementById('login-overlay-pass');
+    const errorEl  = document.getElementById('login-overlay-error');
+    const okBtn    = document.getElementById('login-overlay-ok');
+    const cancelBtn = document.getElementById('login-overlay-cancel');
+    const userSelect = document.getElementById('login-user-select');
+    const switchBtn = document.getElementById('menu-switch-user');
+    const userName  = document.querySelector('#start-menu .user-name');
+
+    if (!switchBtn || !overlay) return;
+
+    // Abrir overlay al pulsar "Cambiar Usuario"
+    switchBtn.addEventListener('click', () => {
+        document.getElementById('start-menu').classList.remove('open');
+        passInput.value = '';
+        errorEl.textContent = '';
+        overlay.style.display = 'flex';
+        setTimeout(() => passInput.focus(), 100);
+    });
+
+    // Cancelar
+    cancelBtn.addEventListener('click', () => {
+        overlay.style.display = 'none';
+    });
+
+    // Validar y cambiar usuario
+    function tryLogin() {
+        const selectedUser = userSelect.value;
+        const expected = USER_PASSWORDS[selectedUser];
+        const entered  = passInput.value;
+
+        // Si el usuario no tiene contraseña, entrar directamente
+        if (expected === '' || entered === expected) {
+            overlay.style.display = 'none';
+            // Actualizar nombre en el menú de inicio
+            if (userName) userName.textContent = selectedUser;
+            const avatarEl = document.querySelector('#start-menu .avatar');
+            if (avatarEl) avatarEl.textContent = selectedUser.charAt(0).toUpperCase();
+            errorEl.textContent = '';
+        } else {
+            errorEl.textContent = '❌ Contraseña incorrecta.';
+            passInput.value = '';
+            passInput.focus();
+        }
+    }
+
+    okBtn.addEventListener('click', tryLogin);
+    passInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') tryLogin();
+    });
+})();

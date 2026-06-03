@@ -8,6 +8,38 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const os = require('os');
 const { exec, execFile } = require('child_process');
+const fs = require('fs');
+
+let usbDetect;
+let chokidar;
+try {
+    usbDetect = require('usb-detection');
+    chokidar = require('chokidar');
+} catch (e) {
+    console.warn("usb-detection or chokidar not installed. Please run pnpm install.");
+}
+
+const mountedDevices = new Map();
+
+function getMountPath(device) {
+    if (process.platform === 'win32') {
+        return getWindowsDriveLetter(device);
+    } else {
+        return new Promise(resolve => resolve(null));
+    }
+}
+
+function getWindowsDriveLetter(device) {
+    return new Promise((resolve) => {
+        const cmd = `wmic logicaldisk where "DriveType=2" get DeviceID /VALUE`;
+        exec(cmd, { encoding: 'utf-8' }, (err, stdout) => {
+            if (err) { resolve(null); return; }
+            const match = stdout.match(/DeviceID=([A-Z]:)/);
+            resolve(match ? match[1] + '\\' : null);
+        });
+        setTimeout(() => resolve(null), 3000);
+    });
+}
 
 // --- VENTANA PRINCIPAL ---
 let mainWindow = null;
@@ -32,19 +64,26 @@ function createMainWindow() {
 
     mainWindow.loadFile('index.html');
 
-    // Permitir abrir DevTools con F12 en desarrollo
-    mainWindow.webContents.on('before-input-event', (event, input) => {
-        if (input.key === 'F12') {
-            mainWindow.webContents.toggleDevTools();
-        }
-        // Permitir salir de pantalla completa con F11
-        if (input.key === 'F11') {
-            mainWindow.setFullScreen(!mainWindow.isFullScreen());
-        }
-        // Salir con Ctrl+Q
-        if (input.control && input.key === 'q') {
-            app.quit();
-        }
+    // Capturar atajos y Windows/Meta key de forma global, incluso dentro de WebViews
+    app.on('web-contents-created', (event, contents) => {
+        contents.on('before-input-event', (e, input) => {
+            if (input.key === 'Meta' && input.type === 'keyDown') {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('menu:toggleStartMenu');
+                }
+            }
+            if (input.key === 'F12' && input.type === 'keyDown') {
+                contents.toggleDevTools();
+            }
+            if (input.key === 'F11' && input.type === 'keyDown') {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.setFullScreen(!mainWindow.isFullScreen());
+                }
+            }
+            if (input.control && input.key === 'q' && input.type === 'keyDown') {
+                app.quit();
+            }
+        });
     });
 
     mainWindow.on('closed', () => {
@@ -221,6 +260,10 @@ ipcMain.handle('window:close', () => {
     if (mainWindow) mainWindow.close();
 });
 
+ipcMain.handle('system:quit', () => {
+    app.quit();
+});
+
 ipcMain.handle('window:toggleFullscreen', () => {
     if (mainWindow) {
         mainWindow.setFullScreen(!mainWindow.isFullScreen());
@@ -318,6 +361,58 @@ function getNetworkSpeed() {
 
 // --- CICLO DE VIDA DE ELECTRON ---
 app.whenReady().then(() => {
+    if (usbDetect) {
+        usbDetect.startMonitoring();
+
+        // Buscar dispositivos que ya estaban conectados antes de abrir la app
+        usbDetect.find().then(devices => {
+            devices.forEach(async (device) => {
+                const mountPath = await getMountPath(device);
+                if (!mountPath) return;
+                mountedDevices.set(device.serialNumber, { device, mountPath });
+                if (mainWindow) {
+                    mainWindow.webContents.send('usb:inserted', {
+                        serialNumber: device.serialNumber,
+                        label: device.deviceName || 'Pendrive',
+                        mountPath,
+                    });
+                }
+            });
+        }).catch(err => console.error("Error finding USB:", err));
+
+        usbDetect.on('add', async (device) => {
+            const mountPath = await getMountPath(device);
+            if (!mountPath) return;
+
+            mountedDevices.set(device.serialNumber, { device, mountPath });
+
+            if (mainWindow) {
+                mainWindow.webContents.send('usb:inserted', {
+                    serialNumber: device.serialNumber,
+                    label: device.deviceName || 'Pendrive',
+                    mountPath,
+                });
+            }
+
+            if (chokidar) {
+                const watcher = chokidar.watch(mountPath, { depth: 0 });
+                watcher.on('all', () => {
+                    if (mainWindow) mainWindow.webContents.send('usb:changed', { mountPath });
+                });
+                mountedDevices.get(device.serialNumber).watcher = watcher;
+            }
+        });
+
+        usbDetect.on('remove', (device) => {
+            const entry = mountedDevices.get(device.serialNumber);
+            if (entry && entry.watcher) entry.watcher.close();
+            mountedDevices.delete(device.serialNumber);
+            if (mainWindow) mainWindow.webContents.send('usb:removed', {
+                serialNumber: device.serialNumber
+            });
+        });
+    }
+
     createMainWindow();
 
     app.on('activate', () => {
@@ -327,6 +422,38 @@ app.whenReady().then(() => {
     });
 });
 
+app.on('will-quit', () => {
+    if (usbDetect) usbDetect.stopMonitoring();
+});
+
 app.on('window-all-closed', () => {
     app.quit();
+});
+
+// --- IPC PARA USB ---
+ipcMain.handle('usb:readDir', async (event, dirPath) => {
+    try {
+        const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+        return entries.map(e => ({
+            name: e.name,
+            isDir: e.isDirectory(),
+            fullPath: path.join(dirPath, e.name),
+            ext: path.extname(e.name).toLowerCase(),
+        }));
+    } catch { return []; }
+});
+
+ipcMain.handle('usb:readTextFile', async (event, filePath) => {
+    try {
+        const content = await fs.promises.readFile(filePath, 'utf-8');
+        return content.slice(0, 50000); // 50 KB max
+    } catch { return null; }
+});
+
+ipcMain.handle('usb:readImageFile', async (event, filePath) => {
+    try {
+        const data = await fs.promises.readFile(filePath);
+        const ext = path.extname(filePath).slice(1);
+        return `data:image/${ext === 'jpg' ? 'jpeg' : ext};base64,${data.toString('base64')}`;
+    } catch { return null; }
 });
