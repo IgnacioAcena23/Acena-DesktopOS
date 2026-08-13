@@ -1,0 +1,24 @@
+{
+  "name": "ace-a-desktop-os",
+  "version": "1.0.0",
+  "description": "Ace-a-DesktopOS - Simulador de Sistema Operativo de Escritorio con Navegador Real",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "author": "Ace-a-DesktopOS Team",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^35.0.0"
+  },
+  "dependencies": {
+    "usb-detection": "^4.12.0",
+    "chokidar": "^3.5.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "usb-detection"
+    ]
+  }
+}
