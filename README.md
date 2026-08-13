@@ -1,10 +1,10 @@
-# Ace-a-DesktopOS 🚀
+# Acena-DesktopOS 
 
 Un simulador interactivo de sistema operativo de escritorio desarrollado en **HTML5, CSS3, JavaScript** y **Python**. El simulador modela un entorno de escritorio completo (con gestor de ventanas, VFS, terminal e integraciones de seguridad) combinando una simulación del Kernel en el cliente y un servidor de telemetría real en el host.
 
 ---
 
-## 🎨 Características Clave
+##  Características Clave
 
 1. **Entorno Gráfico Premium**: Diseño basado en Glassmorphism (efecto cristal templado), bordes suaves, sombras y degradados modernos con tema oscuro integrado.
 2. **Gestión de Ventanas Completa**: Soporte para arrastrar, redimensionar, minimizar, maximizar y cerrar ventanas interactivamente con apilamiento dinámico de foco (z-index).
@@ -22,7 +22,7 @@ Un simulador interactivo de sistema operativo de escritorio desarrollado en **HT
 
 ---
 
-## 📂 Archivos del Proyecto
+##  Archivos del Proyecto
 
 - `index.html`: Estructura y maquetación de la interfaz de escritorio.
 - `style.css`: Estilos visuales, animaciones de ventanas y la rejilla de memoria virtual.
@@ -32,7 +32,7 @@ Un simulador interactivo de sistema operativo de escritorio desarrollado en **HT
 
 ---
 
-## 🚀 Cómo Ejecutar
+##  Cómo Ejecutar
 
 ### Modo Aplicación Nativa (Electron) - RECOMENDADO
 El proyecto ha sido actualizado para funcionar como una aplicación de escritorio real a pantalla completa, con un navegador web verdadero integrado.
