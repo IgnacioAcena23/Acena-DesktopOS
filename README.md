@@ -35,16 +35,22 @@ Un simulador interactivo de sistema operativo de escritorio desarrollado en **HT
 ##  Cómo Ejecutar
 
 ### Modo Aplicación Nativa (Electron) - RECOMENDADO
-El proyecto ha sido actualizado para funcionar como una aplicación de escritorio real a pantalla completa, con un navegador web verdadero integrado.
+El proyecto ha sido configurado para funcionar como una aplicación de escritorio real a pantalla completa. **No es necesario iniciar el servidor de Python en este modo**, ya que Electron utiliza APIs nativas de Node.js para monitorear el sistema y controlar procesos de forma autónoma.
+
 1. Abre una consola en el directorio del proyecto.
 2. Instala las dependencias:
    ```bash
    pnpm install
    ```
 3. Ejecuta la aplicación:
-   ```bash
-   pnpm start
-   ```
+   * **Modo desarrollo (con DevTools abiertas):**
+     ```bash
+     pnpm run dev
+     ```
+   * **Modo normal:**
+     ```bash
+     pnpm start
+     ```
 
 ### Modo Simulado (Directo en Navegador)
 Haz doble clic en `index.html` para abrirlo en cualquier navegador web. Funcionará con datos simulados si el servidor de Python no está activo. (Nota: El "Navegador Real" no estará disponible en este modo).
@@ -61,6 +67,13 @@ Para habilitar lecturas reales desde un navegador web tradicional:
    python server.py
    ```
 4. El script abrirá automáticamente tu navegador en `http://localhost:8000`.
+
+---
+
+## 💾 Persistencia de Datos y Privacidad
+
+- **Almacenamiento Local**: Todo el contenido generado dentro de la simulación —incluyendo archivos del editor de texto (Notepad), directorios creados en el VFS y fotos capturadas con la cámara para la Galería— se guarda de forma persistente en el **`localStorage`** del navegador o de tu instancia de Electron.
+- **Privacidad**: Dado que este almacenamiento es local y exclusivo de cada dispositivo/navegador, las imágenes y archivos creados son estrictamente privados. No se generan archivos físicos en el disco que Git pueda registrar, por lo que **ninguna de tus capturas se subirá al repositorio ni podrá ser vista por otros colaboradores** que clonen el código.
 
 ---
 

@@ -18,7 +18,8 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "usb-detection"
+      "usb-detection",
+      "electron"
     ]
   }
 }
