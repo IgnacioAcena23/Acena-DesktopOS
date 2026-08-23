@@ -3,3 +3,30 @@ node_modules/
 Gasli ig.jpeg
 PlanImplementacion.md
 Instrucciones.md
+
+# Python (Caché y temporales)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+
+# Compilación y empaquetado de Electron
+dist/
+out/
+build/
+
+# Logs de depuración
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Archivos del Sistema Operativo
+.DS_Store
+Thumbs.db
+
+# Configuración local de IDEs
+.vscode/
+.idea/
